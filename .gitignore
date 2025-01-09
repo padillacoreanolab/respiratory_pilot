@@ -169,3 +169,25 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+# Data files
+*.csv
+*.xlsx
+*.xls
+*.txt
+*.json
+*.xml
+*.dat
+*.db
+*.sqlite
+*.h5
+*.hdf5
+*.mat
+*.npy
+*.npz
+*.mp4
+
+# Large files and directories
+data/
+datasets/
+raw_data/
+processed_data/
