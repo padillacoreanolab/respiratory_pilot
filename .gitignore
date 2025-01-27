@@ -191,3 +191,5 @@ data/
 datasets/
 raw_data/
 processed_data/
+EcgData/
+research_env/
