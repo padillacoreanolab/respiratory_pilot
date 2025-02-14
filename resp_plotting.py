@@ -85,3 +85,68 @@ def plot_respiratory_data_by_second(resp_data, fs, start_time, num_seconds=10, f
     
     # Adjust layout to prevent overlap
     plt.tight_layout()
+		
+
+def resp_behavior_plot(resp_df, fs, start_time, duration=10, figsize=(12, 6)):
+    """
+    Plot respiratory data for a given duration with behavior event overlays.
+    
+    Parameters:
+    -----------
+    resp_df : DataFrame
+        DataFrame containing 'Timestamp (s)', 'Respiration Value', and 'Behavioral Event'.
+    fs : float
+        Sampling frequency in Hz.
+    start_time : float
+        Start time of the recording.
+    duration : int, optional
+        Duration of time (in seconds) to display in the plot (default: 10).
+    figsize : tuple, optional
+        Figure size (width, height) in inches.
+    """
+    # Calculate the number of samples to display
+    n_samples = int(duration * fs)
+
+    # Filter data within the desired time range
+    time_end = start_time + duration
+    mask = (resp_df["Timestamp (s)"] >= start_time) & (resp_df["Timestamp (s)"] <= time_end)
+    plot_data = resp_df[mask]
+
+    if plot_data.empty:
+        print("No data available in the specified time range.")
+        return
+
+    # Extract time and respiration values
+    time = plot_data["Timestamp (s)"]
+    resp_values = plot_data["Respiration Value"]
+
+    # Define behavior colors
+    behavior_colors = {
+        "Facial": "blue",
+        "Anogenital": "green",
+        "Flank": "red"
+    }
+
+    # Create the plot
+    plt.figure(figsize=figsize)
+    plt.plot(time, resp_values, 'b-', linewidth=1, label="Respiration Signal")
+
+    # Add behavior event overlays
+    for behavior in plot_data["Behavioral Event"].dropna().unique():
+        if behavior in behavior_colors:
+            behavior_mask = plot_data["Behavioral Event"] == behavior
+            plt.fill_between(time[behavior_mask], resp_values.min(), resp_values.max(), 
+                             color=behavior_colors[behavior], alpha=0.3, label=behavior)
+
+    # Add labels and title
+    plt.xlabel('Time (seconds)')
+    plt.ylabel('Amplitude')
+    plt.title(f'Respiratory Data - First {duration} Seconds')
+
+    # Add grid and legend
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+    plt.show()
