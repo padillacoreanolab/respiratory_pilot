@@ -199,3 +199,83 @@ def find_high_frequency_regions(resp_df, fs, window_size=5, threshold_percentile
         high_freq_regions.append((start_time, peak_times[-1]))
 
     return high_freq_regions
+
+
+def compute_frequency_change(resp_df, fs, pre_event_window=2, post_event_window=2):
+    """
+    Computes % change in respiratory frequency (Hz) before, during, and after each behavioral event.
+
+    Parameters:
+    -----------
+    resp_df : DataFrame
+        DataFrame containing 'Timestamp (s)', 'Respiration Value', 'Behavioral Event', and 'peak'.
+    fs : float
+        Sampling frequency in Hz.
+    pre_event_window : int, optional
+        Time (seconds) to calculate baseline frequency before the event (default: 2).
+    post_event_window : int, optional
+        Time (seconds) to calculate frequency after the event (default: 2).
+
+    Returns:
+    --------
+    behavior_freq_changes : DataFrame
+        DataFrame containing % frequency change before, during, and after each behavioral event.
+    """
+
+    # Extract peak times
+    peak_times = resp_df.loc[resp_df["peak"] == 1, "Timestamp (s)"].values
+
+    # Compute inter-peak intervals (IPI) in seconds
+    inter_peak_intervals = np.diff(peak_times)
+
+    # Compute breathing frequency (Hz) from IPI
+    breathing_freq = 1 / inter_peak_intervals
+
+    # Associate frequencies with time (shifted to match peaks)
+    freq_times = peak_times[1:]  # Ignore first peak since IPI starts at 2nd peak
+
+    # Prepare output DataFrame
+    results = []
+
+    # Iterate through unique behavioral events
+    for behavior in resp_df["Behavioral Event"].dropna().unique():
+        behavior_mask = resp_df["Behavioral Event"] == behavior
+        behavior_times = resp_df.loc[behavior_mask, "Timestamp (s)"].values
+
+        for start_time in behavior_times:
+            end_time = start_time + 1  # Assuming behavioral events last at least 1s
+
+            # Define time ranges
+            pre_start, pre_end = start_time - pre_event_window, start_time
+            post_start, post_end = end_time, end_time + post_event_window
+
+            # Get frequency values in each period
+            pre_freqs = breathing_freq[(freq_times >= pre_start) & (freq_times < pre_end)]
+            during_freqs = breathing_freq[(freq_times >= start_time) & (freq_times <= end_time)]
+            post_freqs = breathing_freq[(freq_times >= post_start) & (freq_times <= post_end)]
+
+            # Compute average frequencies
+            avg_pre = np.mean(pre_freqs) if len(pre_freqs) > 0 else np.nan
+            avg_during = np.mean(during_freqs) if len(during_freqs) > 0 else np.nan
+            avg_post = np.mean(post_freqs) if len(post_freqs) > 0 else np.nan
+
+            # Compute % change
+            change_pre_during = ((avg_during - avg_pre) / avg_pre * 100) if avg_pre else np.nan
+            change_during_post = ((avg_post - avg_during) / avg_during * 100) if avg_during else np.nan
+
+            # Store result
+            results.append({
+                "Behavior": behavior,
+                "Start Time": start_time,
+                "End Time": end_time,
+                "Freq Before (Hz)": avg_pre,
+                "Freq During (Hz)": avg_during,
+                "Freq After (Hz)": avg_post,
+                "% Change Before-During": change_pre_during,
+                "% Change During-After": change_during_post
+            })
+
+    # Convert to DataFrame
+    behavior_freq_changes = pd.DataFrame(results)
+    
+    return behavior_freq_changes

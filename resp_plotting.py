@@ -35,58 +35,71 @@ def resp_plot(cleaned_signal, time, peaks, troughs, onset=None, end=None):
 	plt.show()
 	
 
-def plot_respiratory_data_by_second(resp_data, fs, start_time, num_seconds=10, figsize=(15, 12)):
+# 10 second analysis
+def plot_respiratory_data_by_second(resp_data, fs, start_time, global_scale=False, figsize=(15, 12)):
     """
     Plot respiratory data with each second in a separate subplot.
-    
+
     Parameters:
     -----------
     resp_data : array-like
-        The respiratory data array
+        The respiratory data array.
     fs : float
-        Sampling frequency in Hz
+        Sampling frequency in Hz.
     start_time : float
-        Start time of the recording
+        Start time of the segment to plot in seconds.
     num_seconds : int, optional
-        Number of seconds to plot (default: 10)
+        Number of seconds to plot (default: 10).
+    global_scale : bool, optional
+        Whether to use a fixed y-axis scale across all plots (default: False).
     figsize : tuple, optional
-        Figure size (width, height) in inches
+        Figure size (width, height) in inches.
     """
-    # Create figure and subplots
+    num_seconds=10
+
     fig, axes = plt.subplots(5, 2, figsize=figsize)
     axes = axes.flatten()
     
-    # Calculate samples per second
     samples_per_second = int(fs)
+    start_index = int(start_time * fs)
+
+    # Determine y-axis limits based on global or segment scaling
+    if global_scale:
+        # Use entire dataset for y-axis range
+        y_min, y_max = np.min(resp_data), np.max(resp_data)
+    else:
+        # Use only the selected segment for y-axis range
+        end_index = min(start_index + num_seconds * samples_per_second, len(resp_data))
+        y_min, y_max = np.min(resp_data[start_index:end_index]), np.max(resp_data[start_index:end_index])
     
+    y_margin = (y_max - y_min) * 0.1  # Add 10% margin
+
     for i in range(num_seconds):
-        # Calculate start and end indices for this second
-        start_idx = i * samples_per_second
-        end_idx = (i + 1) * samples_per_second
+        start_idx = start_index + i * samples_per_second
+        end_idx = start_idx + samples_per_second
         
-        # Create time array for this second
-        time = np.arange(samples_per_second) / fs + start_time + i
+        if start_idx >= len(resp_data):
+            break
+        if end_idx > len(resp_data):
+            end_idx = len(resp_data)
         
-        # Plot data for this second
+        time = np.arange(start_idx, end_idx) / fs  # Proper time axis
+
         axes[i].plot(time, resp_data[start_idx:end_idx], 'b-', linewidth=1)
-        
-        # Add labels and title for each subplot
         axes[i].set_xlabel('Time (seconds)')
         axes[i].set_ylabel('Amplitude')
-        axes[i].set_title(f'Second {i+1}')
-        
-        # Add grid
+        axes[i].set_title(f'Second {start_time + i}-{start_time + i + 1}')
         axes[i].grid(True, alpha=0.3)
         
-        # Set consistent y-axis limits across all subplots
-        y_min = np.min(resp_data[:num_seconds * samples_per_second])
-        y_max = np.max(resp_data[:num_seconds * samples_per_second])
-        y_margin = (y_max - y_min) * 0.1  # Add 10% margin
+        # Set consistent y-axis limits
         axes[i].set_ylim(y_min - y_margin, y_max + y_margin)
-    
-    # Adjust layout to prevent overlap
+
     plt.tight_layout()
-		
+    plt.show()
+
+
+import numpy as np
+import matplotlib.pyplot as plt
 
 def resp_behavior_plot(resp_df, fs, start_time, duration=10, figsize=(12, 6)):
     """
@@ -105,8 +118,15 @@ def resp_behavior_plot(resp_df, fs, start_time, duration=10, figsize=(12, 6)):
     figsize : tuple, optional
         Figure size (width, height) in inches.
     """
-    # Calculate the number of samples to display
-    n_samples = int(duration * fs)
+    # Ensure behavioral events match the expected format
+    resp_df["Behavioral Event"] = resp_df["Behavioral Event"].str.lower()
+    
+    # Define behavior colors
+    behavior_colors = {
+        "facial": "blue",
+        "anogenital sniffing": "green",
+        "fighting": "red"
+    }
 
     # Filter data within the desired time range
     time_end = start_time + duration
@@ -121,28 +141,41 @@ def resp_behavior_plot(resp_df, fs, start_time, duration=10, figsize=(12, 6)):
     time = plot_data["Timestamp (s)"]
     resp_values = plot_data["Respiration Value"]
 
-    # Define behavior colors
-    behavior_colors = {
-        "Facial": "blue",
-        "Anogenital": "green",
-        "Flank": "red"
-    }
-
     # Create the plot
     plt.figure(figsize=figsize)
     plt.plot(time, resp_values, 'b-', linewidth=1, label="Respiration Signal")
 
-    # Add behavior event overlays
+    # Add behavior event overlays (Handle Back-to-Back Events)
     for behavior in plot_data["Behavioral Event"].dropna().unique():
         if behavior in behavior_colors:
             behavior_mask = plot_data["Behavioral Event"] == behavior
-            plt.fill_between(time[behavior_mask], resp_values.min(), resp_values.max(), 
-                             color=behavior_colors[behavior], alpha=0.3, label=behavior)
+            behavior_times = time[behavior_mask]
+
+            if not behavior_times.empty:
+                # Identify breaks in consecutive timestamps
+                event_ranges = []
+                prev_time = None
+                event_start = None
+
+                for t in behavior_times:
+                    if prev_time is None or (t - prev_time) > 1:  # If gap > 1 second, it's a new event
+                        if event_start is not None:
+                            event_ranges.append((event_start, prev_time))
+                        event_start = t
+                    prev_time = t
+
+                # Append the last event
+                if event_start is not None and prev_time is not None:
+                    event_ranges.append((event_start, prev_time))
+
+                # Plot each separate event
+                for start, end in event_ranges:
+                    plt.axvspan(start, end, color=behavior_colors[behavior], alpha=0.3, label=behavior)
 
     # Add labels and title
     plt.xlabel('Time (seconds)')
     plt.ylabel('Amplitude')
-    plt.title(f'Respiratory Data - First {duration} Seconds')
+    plt.title(f'Respiratory Data - {duration} Seconds from {start_time}s')
 
     # Add grid and legend
     plt.grid(True, alpha=0.3)
@@ -151,6 +184,8 @@ def resp_behavior_plot(resp_df, fs, start_time, duration=10, figsize=(12, 6)):
     # Adjust layout to prevent label cutoff
     plt.tight_layout()
     plt.show()
+
+
 
 
 
