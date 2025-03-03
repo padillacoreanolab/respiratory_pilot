@@ -2,6 +2,7 @@ import neurokit2 as nk
 import pandas as pd
 import numpy as np
 import warnings
+import matplotlib.pyplot as plt
 
 def mice_rsp_clean(rsp_signal, sampling_rate):
     """
@@ -133,3 +134,68 @@ def peakfinder(x0, sel=None, thresh=None, extrema=1, include_endpoints=True, int
 
     return peak_locs, peak_mags
 
+
+def find_high_frequency_regions(resp_df, fs, window_size=5, threshold_percentile=30):
+    """
+    Identifies regions in the respiratory signal where the breathing frequency is higher.
+
+    Parameters:
+    -----------
+    resp_df : DataFrame
+        DataFrame containing 'Timestamp (s)' and 'Respiration Value'.
+    fs : float
+        Sampling frequency in Hz.
+    window_size : int, optional
+        Number of peaks to use for the moving average of inter-peak distances (default: 5).
+    threshold_percentile : float, optional
+        Percentile value to determine high-frequency regions (default: 30 means areas with the lowest 30% of inter-peak intervals).
+    show_plot : bool, optional
+        Whether to visualize the detected high-frequency regions (default: True).
+
+    Returns:
+    --------
+    high_freq_regions : list of tuples
+        A list of (start_time, end_time) tuples representing high-frequency breathing regions.
+    """
+
+    # Extract respiration signal
+    time = resp_df["Timestamp (s)"].values
+    resp_values = resp_df["Respiration Value"].values
+
+    # Detect peaks using peakfinder
+    peak_inds, _ = peakfinder(resp_values)
+
+    # Get peak times
+    peak_times = time[peak_inds.astype(int)]
+
+    # Compute inter-peak intervals (IPI)
+    inter_peak_intervals = np.diff(peak_times)  # Time differences between peaks
+
+    # Smooth using a moving average
+    if len(inter_peak_intervals) >= window_size:
+        smoothed_ipi = np.convolve(inter_peak_intervals, np.ones(window_size) / window_size, mode="valid")
+    else:
+        smoothed_ipi = inter_peak_intervals  # No smoothing if not enough peaks
+
+    # Find the threshold based on the percentile
+    threshold = np.percentile(smoothed_ipi, threshold_percentile)
+
+    # Identify high-frequency regions (where IPI is below the threshold)
+    high_freq_regions = []
+    start_time = None
+
+    for i, interval in enumerate(smoothed_ipi):
+        if interval < threshold:
+            if start_time is None:
+                start_time = peak_times[i]  # Start of high-frequency region
+        else:
+            if start_time is not None:
+                end_time = peak_times[i]  # End of high-frequency region
+                high_freq_regions.append((start_time, end_time))
+                start_time = None
+
+    # Add the last region if it extends to the end
+    if start_time is not None:
+        high_freq_regions.append((start_time, peak_times[-1]))
+
+    return high_freq_regions
