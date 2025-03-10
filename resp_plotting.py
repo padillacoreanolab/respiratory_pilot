@@ -123,14 +123,14 @@ def resp_behavior_plot(resp_df, fs, start_time, duration=10, figsize=(12, 6)):
     
     # Define behavior colors
     behavior_colors = {
-        "facial": "blue",
+        "facial sniffing": "blue",
         "anogenital sniffing": "green",
         "fighting": "red"
     }
 
     # Filter data within the desired time range
     time_end = start_time + duration
-    mask = (resp_df["Timestamp (s)"] >= start_time) & (resp_df["Timestamp (s)"] <= time_end)
+    mask = (resp_df["Timestamps"] >= start_time) & (resp_df["Timestamps"] <= time_end)
     plot_data = resp_df[mask]
 
     if plot_data.empty:
@@ -138,8 +138,8 @@ def resp_behavior_plot(resp_df, fs, start_time, duration=10, figsize=(12, 6)):
         return
 
     # Extract time and respiration values
-    time = plot_data["Timestamp (s)"]
-    resp_values = plot_data["Respiration Value"]
+    time = plot_data["Timestamps"]
+    resp_values = plot_data["RespSignal"]
 
     # Create the plot
     plt.figure(figsize=figsize)
@@ -240,9 +240,9 @@ def final_resp_plot(resp_df, fs, start_time, duration=10, figsize=(12, 6), show_
     # Add behavior event overlays if behavioral_data is True
     if behavioral_data and "Behavioral Event" in resp_df.columns:
         behavior_colors = {
-            "Facial": "blue",
-            "Anogenital": "green",
-            "Flank": "red"
+            "facial sniffing": "blue",
+            "anogenital sniffing": "green",
+            "fight": "red"
         }
         for behavior in plot_data["Behavioral Event"].dropna().unique():
             if behavior in behavior_colors:
@@ -378,7 +378,7 @@ def final_resp_plot2(resp_df, fs, start_time, duration=10, figsize=(12, 6), show
     plt.title(f'Respiratory Data - First {duration} Seconds')
 
     # Add grid and legend
-    plt.grid(True, alpha=0.3)
+    plt.grid(False, alpha=0.3)
     plt.legend()
 
     # Adjust layout to prevent label cutoff
