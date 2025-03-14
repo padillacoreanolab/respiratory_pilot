@@ -6,7 +6,27 @@ import matplotlib.pyplot as plt
 
 def peakfinder(x0, sel=None, thresh=None, extrema=1, include_endpoints=True, interpolate=False):
     """
-    Python version of the MATLAB peakfinder function.
+Python version of the MATLAB peakfinder function.                                                                       
+Purpose: Identifies peaks (maxima or minima) in a signal.
+Parameters:
+x0: The signal in which peaks will be detected.
+
+sel: A threshold value used to define what counts as a peak.
+
+thresh: A minimum magnitude threshold.
+
+extrema: Whether to find maxima (1) or minima (-1).
+
+include_endpoints: Whether to include the endpoints as potential peaks.
+
+interpolate: Whether to interpolate the peaks to improve accuracy.
+
+How it works:
+First, it computes the derivative of the signal and finds zero crossings, which indicates possible peak locations.
+Then, it searches for local maxima (or minima) that exceed a certain threshold.
+
+If interpolation is enabled, it refines the peak location by fitting a quadratic curve around the detected peaks.
+Output: Returns the indices and magnitudes of the detected peaks.
     """
     x0 = np.asarray(x0, dtype=float)
     
