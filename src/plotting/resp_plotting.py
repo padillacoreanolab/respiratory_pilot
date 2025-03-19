@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from signal_processing import peakfinder
+from src.data_processing import peakfinder
 
 def resp_plot(cleaned_signal, time, peaks, troughs, onset=None, end=None):
 	# Create the plot
