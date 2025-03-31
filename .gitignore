@@ -193,5 +193,6 @@ raw_data/
 processed_data/
 EcgData/
 research_env/
-BorisData/
+borisData/
 sequioaBoris/
+respData/
