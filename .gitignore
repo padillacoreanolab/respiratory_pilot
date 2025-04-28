@@ -178,12 +178,10 @@ cython_debug/
 *.dat
 *.db
 *.sqlite
-*.h5
-*.hdf5
-*.mat
-*.npy
-*.npz
-*.mp4
+*.csv
+*.avi
+*
+
 
 # Large files and directories
 data/

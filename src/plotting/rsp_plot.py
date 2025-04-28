@@ -24,48 +24,50 @@ class Rsp_Kit:
 
 		self.df = None
 		self.time = None
-		self.time_stamps = None
+		self.timestamps = None
 		self.behavioral_maps = None
 		self.peaks = None
 		self.high_frequency_areas = None
 		
 		# Creates Initial Dataframe with no behavior data
-		self._timestamps()
+		self.generate_timestamps()
 		self._frequencies()
-		self._create_df()
 
 		# If behavior data is provided, map behaviors to timestamps
 		if behavior_data is not None:
-			self._map_behaviors()
+			self._create_df()
+			self._map_behaviors() 
+		else:
 			self._create_df()
 
+
 	# Creating Time array for Dataframe, or for plot.
-	def _timestamps(self, seconds = None):
+	def generate_timestamps(self, seconds = None):
 		# Creating total time array
 		n_samples = len(self.resp_data)
 		self.time = np.arange(n_samples) / self.fs + self.start_time
 
 		# Creating time array using duration
 		total_duration = self.size/self.fs
-		self._timestamps = np.arange(0, total_duration, 1/self.fs)  # Create time axis
+		self.timestamps = np.arange(0, total_duration, 1/self.fs)  # Create time axis
 
 	# Tuple of timestamps with high frequencies (relevant plotting areas)
 	def _frequencies(self):
 		pass
 
 	# Returns np array of behaviors mapped to correct timestamps
-	def _map_behaviors(self, behavior_data=None):
-		if behavior_data is not None:
-			pass
+	def _map_behaviors(self):
+		if self.behavior_data is None:
+			return None
 
-		behavior_data = behavior_data[['Behavior', 'Start (s)', 'Stop (s)']]
-		for _, row in behavior_data.iterrows():
+		behav_data = self.behavior_data[['Behavior', 'Start (s)', 'Stop (s)']]
+		for _, row in behav_data.iterrows():
 			start_time = row["Start (s)"]
 			stop_time = row["Stop (s)"]
 			behavior = row["Behavior"]
 
 			# Mask: Find respiration timestamps that fall within the behavior window
-			mask = (self.df["Timestamp (s)"] >= start_time) & (self.df["Timestamp (s)"] <= stop_time)
+			mask = (self.df["Timestamps"] >= start_time) & (self.df["Timestamps"] <= stop_time)
 
 			# Assign the behavior to matching respiration timestamps
 			self.df.loc[mask, "Behavioral Event"] = behavior
@@ -76,8 +78,8 @@ class Rsp_Kit:
 
 	# Use data_processing/frequency_analysis peakfinder
 	# returns np array of peaks
-	def peaks(self, x0, sel=None, thresh=None, extrema=1, include_endpoints=True, interpolate=False):
-    	"""
+	def _find_peaks(self, x0, sel=None, thresh=None, extrema=1, include_endpoints=True, interpolate=False):
+		"""
 		Python version of the MATLAB peakfinder function.
 
 		Parameters:
@@ -179,18 +181,35 @@ class Rsp_Kit:
 
 		return peak_locs, peak_mags
 
+
+	def update_peaks(self, sel=None, thresh=None, extrema=1, include_endpoints=True, interpolate=False):
+		"""Updates self.peaks with indices of peaks found in the respiration data."""
+		peak_inds, _ = self._find_peaks(
+			self.resp_data,
+			sel=sel,
+			thresh=thresh,
+			extrema=extrema,
+			include_endpoints=include_endpoints,
+			interpolate=interpolate
+		)
+		self.peaks = np.full(len(self.resp_data), np.nan)
+		self.peaks[peak_inds.astype(int)] = self.resp_data[peak_inds.astype(int)]
+
+
 	# Creates the dataframe using all previous data
 	def _create_df(self):
 		# resp_data should always be present so we base the length of the necessary NaN padding on it
 		max_len = len(self.resp_data)
 
 		# Pad missing data with NaN
-		self.behavior_data= self.behavioral_data if self.behavior_data is not None else [np.nan] * max_len
-		self.peaks = self.peaks if self.peaks is not None else [np.nan] * max_len
+		self.behavior_data= self.behavior_data if self.behavior_data is not None else [np.nan] * max_len
+		if self.peaks is None:
+			self.update_peaks()
+
 
 		# Create the DataFrame
 		self.df = pd.DataFrame({
-			'Timestamps': self._timestamps,
+			'Timestamps': self.timestamps,
 			'Respiration Value': self.resp_data,  # Always present
 			'Behavioral Event': self.behavioral_maps,
 			'Peaks': self.peaks
@@ -199,9 +218,9 @@ class Rsp_Kit:
 
 
 	# final_resp_plot code
-	def plot(self, resp_df, fs, start_time, duration=10, figsize=(12, 6), show_peaks=False, 
-                    peak_sel=None, peak_thresh=None, behavioral_data=False, show_high_freq_regions=False, 
-                    high_freq_window=5, high_freq_threshold_percentile=30):
+	def plot(self, start_time=0, duration=10, figsize=(12, 6), show_peaks=False, 
+					peak_sel=None, peak_thresh=None, behavior_data=False, show_high_freq_regions=False, 
+					high_freq_window=5, high_freq_threshold_percentile=30):
 		"""
 		Plot respiratory data for a given duration with optional peak detection, behavior event overlays,
 		and high-frequency breathing region identification.
@@ -209,7 +228,7 @@ class Rsp_Kit:
 		Parameters:
 		-----------
 		resp_df : DataFrame
-			DataFrame containing 'Timestamp (s)', 'Respiration Value', and optionally 'Behavioral Event'.
+			DataFrame containing 'Timestamp', 'Respiration Value', and optionally 'Behavioral Event'.
 		fs : float
 			Sampling frequency in Hz.
 		start_time : float
@@ -236,15 +255,15 @@ class Rsp_Kit:
 
 		# Filter data within the desired time range
 		time_end = start_time + duration
-		mask = (resp_df["Timestamp (s)"] >= start_time) & (resp_df["Timestamp (s)"] <= time_end)
-		plot_data = resp_df[mask]
+		mask = (self.df["Timestamps"] >= start_time) & (self.df["Timestamps"] <= time_end)
+		plot_data = self.df[mask]
 
 		if plot_data.empty:
 			print("No data available in the specified time range.")
 			return
 
 		# Extract time and respiration values
-		time = plot_data["Timestamp (s)"].values
+		time = plot_data["Timestamps"].values
 		resp_values = plot_data["Respiration Value"].values
 
 		# Create the plot
@@ -295,15 +314,16 @@ class Rsp_Kit:
 				first_label = False  # Only add label once to avoid duplicate legends
 
 		# Add behavior event overlays if behavioral_data is True
-		if behavioral_data and "Behavioral Event" in resp_df.columns:
+		if behavior_data and "Behavior" in self.df.columns:
 			behavior_colors = {
 				"Facial": "blue",
 				"Anogenital": "green",
-				"Flank": "red"
+				"Flank": "red",
+				"sniffing object": "purple",
 			}
-			for behavior in plot_data["Behavioral Event"].dropna().unique():
+			for behavior in plot_data["Behavior"].dropna().unique():
 				if behavior in behavior_colors:
-					behavior_mask = plot_data["Behavioral Event"] == behavior
+					behavior_mask = plot_data["Behavior"] == behavior
 					plt.fill_between(time[behavior_mask], resp_values.min(), resp_values.max(), 
 									color=behavior_colors[behavior], alpha=0.3, label=behavior)
 
