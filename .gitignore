@@ -180,7 +180,7 @@ cython_debug/
 *.sqlite
 *.csv
 *.avi
-*
+
 
 
 # Large files and directories
@@ -193,3 +193,4 @@ research_env/
 borisData/
 sequioaBoris/
 respData/
+testing_data/
