@@ -2,11 +2,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from data_processing.signal_processing import peakfinder
-
-import numpy as np
-import matplotlib.pyplot as plt
 from scipy.signal import find_peaks, welch
-
+import warnings
 
 class Rsp_Kit:
 
@@ -220,7 +217,7 @@ class Rsp_Kit:
 	# final_resp_plot code
 	def plot(self, start_time=0, duration=10, figsize=(12, 6), show_peaks=False, 
 					peak_sel=None, peak_thresh=None, behavior_data=False, show_high_freq_regions=False, 
-					high_freq_window=5, high_freq_threshold_percentile=30):
+					high_freq_window=5, high_freq_threshold_percentile=30, title="Respiratory Signal"):
 		"""
 		Plot respiratory data for a given duration with optional peak detection, behavior event overlays,
 		and high-frequency breathing region identification.
@@ -330,7 +327,7 @@ class Rsp_Kit:
 		# Add labels and title
 		plt.xlabel('Time (seconds)')
 		plt.ylabel('Amplitude')
-		plt.title(f'Respiratory Data - First {duration} Seconds')
+		plt.title(f'{title}- First {duration} Seconds')
 
 		# Add grid and legend
 		plt.grid(False, alpha=0.3)

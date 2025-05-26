@@ -1,0 +1,14 @@
+name: spikeenv
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy=1.26.4
+  - pandas=2.2.3
+  - scipy
+  - matplotlib
+  - pip
+  - pip:
+      - spikeinterface==0.100.6
+      - TDT==0.6.6
+      - NeuroKit2==0.2.10
