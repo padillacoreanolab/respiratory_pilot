@@ -25,7 +25,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-h5_outputs/
+
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -196,3 +196,4 @@ sequioaBoris/
 respData/
 testing_data/
 ekg_resp_data/
+h5_outputs/
