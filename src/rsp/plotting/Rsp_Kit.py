@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from data_processing.signal_processing import peakfinder
+from rsp.data_processing.signal_processing import peakfinder
 from scipy.signal import find_peaks, welch
 import warnings
 
@@ -10,6 +10,28 @@ class Rsp_Kit:
 	def __init__(self, resp_data, fs, start_time, size, end_time=None, behavior_data=None):
 		"""
 		self.df = dataframe with respiratory signal, timestamp
+		self.time = time array for plotting
+		self.timestamps = timestamps for plotting
+		self.behavioral_maps = np.array([])  # Placeholder for behavioral data
+		self.peaks = None
+		self.high_frequency_areas = None
+		Parameters:
+		-----------
+		resp_data : np.ndarray
+			1D array of respiratory signal data.
+		fs : float
+			Sampling frequency in Hz.
+		start_time : float
+			Start time of the recording in seconds.
+		size : float
+			Total duration of the recording in samples (not seconds).
+			For example, if fs is 100 Hz and size is 100,000
+			it means the recording lasts for 1000 second or 16.6 minutes.
+		end_time : float, optional
+			End time of the recording in seconds. If not provided, defaults to start_time + size.
+		behavior_data : pd.DataFrame, optional
+			DataFrame containing behavioral events with columns 'Behavior', 'Start (s)', and 'Stop (s)'.
+			If not provided, no behavioral data will be included in the DataFrame.
 		"""
 
 		# Attributes used to help create dataframe in methods
@@ -40,9 +62,22 @@ class Rsp_Kit:
 
 	# Creating Time array for Dataframe, or for plot.
 	def generate_timestamps(self, seconds = None):
-		# Creating total time array
-		n_samples = len(self.resp_data)
-		self.time = np.arange(n_samples) / self.fs + self.start_time
+		"""
+		Generates timestamps for the respiratory data based on the sampling frequency and start time.
+		Parameters:
+		-----------
+		seconds : int, optional
+			If provided, generates timestamps for the specified number of seconds.
+			If None, uses the size attribute to determine the duration.
+		"""
+		if seconds is not None:
+			# If seconds is provided, calculate the number of samples based on fs
+			n_samples = int(seconds * self.fs)
+			self.size = n_samples / self.fs
+		else:	
+			# Creating total time array
+			n_samples = len(self.resp_data)
+			self.time = np.arange(n_samples) / self.fs + self.start_time
 
 		# Creating time array using duration
 		total_duration = self.size/self.fs
@@ -54,6 +89,10 @@ class Rsp_Kit:
 
 	# Returns np array of behaviors mapped to correct timestamps
 	def _map_behaviors(self):
+		""" 
+		Maps behavioral events to the respiratory data timestamps.
+		Iterates through the behavior data and assigns the behavior to the corresponding timestamps in the respiratory data.
+		"""
 		if self.behavior_data is None:
 			return None
 
@@ -180,7 +219,21 @@ class Rsp_Kit:
 
 
 	def update_peaks(self, sel=None, thresh=None, extrema=1, include_endpoints=True, interpolate=False):
-		"""Updates self.peaks with indices of peaks found in the respiration data."""
+		"""
+		Updates self.peaks with indices of peaks found in the respiration data.
+		Parameters:
+		-----------
+		sel : float, optional
+			Selectivity threshold for peak detection. If None, defaults to (max - min) / 4.
+		thresh : float, optional
+			Minimum threshold for detected peaks. If None, no threshold is applied.
+		extrema : int, optional
+			1 to find maxima, -1 to find minima. Default is 1 (maxima).
+		include_endpoints : bool, optional
+			Whether to include endpoints as possible extrema. Default is True.
+		interpolate : bool, optional
+			Whether to perform quadratic interpolation around each extrema. Default is False. | Should be probably always be False? double check this.
+		"""
 		peak_inds, _ = self._find_peaks(
 			self.resp_data,
 			sel=sel,
@@ -195,6 +248,10 @@ class Rsp_Kit:
 
 	# Creates the dataframe using all previous data
 	def _create_df(self):
+		"""
+		Creates a DataFrame with timestamps, respiration data, behavioral events, and peaks.
+		"""
+		
 		# resp_data should always be present so we base the length of the necessary NaN padding on it
 		max_len = len(self.resp_data)
 
