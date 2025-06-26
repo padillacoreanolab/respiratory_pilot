@@ -7,7 +7,7 @@ import warnings
 
 class Rsp_Kit:
 
-	def __init__(self, resp_data, fs, size, start_time=0, end_time=None, behavior_data=None):
+	def __init__(self, resp_data, fs, n_samples, start_time=0, end_time=None, behavior_data=None):
 		"""
 		Initialize the Rsp_Kit object with respiratory data and optional behavioral data.
 		Respiratory data is expected to be a 1D numpy array.
@@ -19,10 +19,10 @@ class Rsp_Kit:
 			Sampling frequency in Hz.
 		start_time : float
 			Start time of the recording in seconds.
-		size : float
+		n_samples : float
 			Total duration of the recording in samples (not seconds).
 		end_time : float, optional
-			End time of the recording in seconds. If not provided, defaults to start_time + size
+			End time of the recording in seconds. If not provided, defaults to start_time + n_samples
 		behavior_data : pd.DataFrame, optional
 			DataFrame containing behavioral events with columns 'Behavior', 'Start (s)', and 'Stop
 			 (s)'.
@@ -34,12 +34,12 @@ class Rsp_Kit:
 			Sampling frequency in Hz.
 		start_time : float
 			Start time of the recording in seconds.
-		size : float
+		n_samples : float
 			Total duration of the recording in samples (not seconds).
-			For example, if fs is 100 Hz and size is 100,000
+			For example, if fs is 100 Hz and n_samples is 100,000
 			it means the recording lasts for 1000 second or 16.6 minutes.
 		end_time : float, optional
-			End time of the recording in seconds. If not provided, defaults to start_time + size.
+			End time of the recording in seconds. If not provided, defaults to start_time + n_samples.
 		behavior_data : pd.DataFrame, optional
 			DataFrame containing behavioral events with columns 'Behavior', 'Start (s)', and 'Stop (s)'.
 			If not provided, no behavioral data will be included in the DataFrame.
@@ -48,7 +48,7 @@ class Rsp_Kit:
 		# Attributes used to help create dataframe in methods
 		self.fs = fs
 		self.start_time = start_time
-		self.size = size
+		self.n_samples = n_samples
 		self.resp_data = resp_data
 		self.behavior_data = behavior_data
 
@@ -79,20 +79,20 @@ class Rsp_Kit:
 		-----------
 		seconds : int, optional
 			If provided, generates timestamps for the specified number of seconds.
-			If None, uses the size attribute to determine the duration.
+			If None, uses the n_samples attribute to determine the duration.
 		"""
 		if seconds is not None:
 			# If seconds is provided, calculate the number of samples based on fs
 			n_samples = int(seconds * self.fs)
-			self.size = n_samples / self.fs
+			self.n_samples = n_samples / self.fs
 		else:	
 			# Creating total time array
 			n_samples = len(self.resp_data)
 			self.time = np.arange(n_samples) / self.fs + self.start_time
 
 		# Creating time array using duration
-		total_duration = self.size/self.fs
-		self.timestamps = np.arange(0, total_duration, 1/self.fs)  # Create time axis
+		self.timestamps = np.arange(len(self.resp_data)) / self.fs + self.start_time
+  # Create time axis
 
 	# Tuple of timestamps with high frequencies (relevant plotting areas)
 	def _frequencies(self):
@@ -301,7 +301,7 @@ class Rsp_Kit:
 		duration : int, optional
 			Duration of time (in seconds) to display in the plot (default: 10).
 		figsize : tuple, optional
-			Figure size (width, height) in inches.
+			Figure n_samples (width, height) in inches.
 		show_peaks : bool, optional
 			Whether to detect and plot peaks in the respiratory signal (default: False).
 		peak_sel : float, optional
