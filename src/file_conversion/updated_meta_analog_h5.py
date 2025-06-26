@@ -41,15 +41,6 @@ def get_metadata_from_rec_name(rec_name):
 
 
 def read_trodes_extracted_data_file(filename):
-    """ 
-    Reads a Trodes extracted data file and returns its contents as a dictionary.
-    The file format is expected to start with a header line "<Start settings>" and end with "<End settings>".
-    The fields are expected to be in the format "key: value" and the data follows the header.
-
-    returns:
-        dict: A dictionary containing the fields and data from the file.
-    """
-
     with open(filename, "rb") as f:
         if f.readline().decode("ascii").strip() != "<Start settings>":
             raise Exception("Settings format not supported")
@@ -97,29 +88,13 @@ def parse_fields(field_str):
 
 
 def organize_single_trodes_export(dir_path):
-    """
-    Organizes a single Trodes export directory into a dictionary of data files.
-    Skips files that are not relevant (e.g., raw_group0 or .txt files).
-    Args:
-        dir_path (str): Path to the Trodes export directory.
-    Returns:
-        dict: A dictionary where keys are file names (without extensions) and values are the data read from those files.
-    """
-
     result = {}
     for file_name in os.listdir(dir_path):
         if "raw_group0" in file_name or file_name.endswith(".txt"):
             continue
         sub_key = file_name.rsplit(".", 2)[-2]
-
         try:
-            file_data = read_trodes_extracted_data_file(os.path.join(dir_path, file_name))
-            result[sub_key] = file_data
-            try:
-                result[sub_key]["sampling_frequency"] = float(file_data.get("samplingfrequency", np.nan))
-            except Exception as e:
-                print(f"Could not extract sampling frequency from {file_name}: {e}")
-
+            result[sub_key] = read_trodes_extracted_data_file(os.path.join(dir_path, file_name))
         except Exception as e:
             print(f"Skipping {file_name}: {e}")
     return result
@@ -144,47 +119,71 @@ def organize_all_trodes_export(dir_path):
 
 
 def get_data_from_rec_file(rec_file):
+    ekg_signal, resp_signal = None, None
+    ekg_meta, resp_meta = {}, {}
+
+    # EKG from SpikeGadgets .rec via SpikeInterface
     try:
         ekg = se.read_spikegadgets(rec_file, stream_id='trodes')
         ekg_signal = ekg.get_traces(channel_ids=['21']).flatten()
+
+        ekg_meta = {
+            'sampling_frequency': ekg.get_sampling_frequency(),
+            'channel_id': '21',
+            'num_samples': len(ekg_signal),
+            'duration_sec': len(ekg_signal) / ekg.get_sampling_frequency(),
+            'stream_id': 'trodes'
+        }
     except Exception as e:
-        ekg_signal = None
         print(f"Could not extract EKG: {e}")
 
+    # RESP from .analog folder
     try:
         parent_folder = os.path.dirname(rec_file)
         resp = organize_all_trodes_export(parent_folder)
         fname = os.path.basename(parent_folder)
+        resp_group = resp[fname]['analog']['analog_ECU_Ain1']
 
-        # resp object
-        resp_data = resp[fname]['analog']['analog_ECU_Ain1']
-        
-        # signal
-        resp_signal = resp_data['data']['voltage'].astype(float)
-
-        # sampling frequency
-        resp_sampling_freq = resp_data.get('sampling_frequency', None)
-
-        if resp_sampling_freq is None:
-            print("Sampling frequency not found in resp data.")
-        
+        resp_signal = resp_group['data']['voltage'].astype(float)
+        resp_sr = resp_group['sample_rate'][()]
+        resp_meta = {
+            'sampling_frequency': resp_sr,
+            'start_time': resp_group.get('start_time', np.nan),
+            'num_samples': len(resp_signal),
+            'duration_sec': len(resp_signal) / resp_sr,
+            'channel': 'analog_ECU_Ain1',
+            'byte_order': resp_group.get('byte_order', 'unknown'),
+            'units': 'volts'
+        }
     except Exception as e:
-        resp_signal = None
-        resp_sampling_freq = None
         print(f"Could not extract RESP: {e}")
-    
-    return ekg_signal, resp_signal, resp_sampling_freq
+
+    return ekg_signal, ekg_meta, resp_signal, resp_meta
 
 
-def export_to_h5(output_path, ekg_signal, resp_signal, metadata):
+
+def export_to_h5(output_path, ekg_signal, resp_signal, metadata, ekg_meta, resp_meta):
     with h5py.File(output_path, 'w') as f:
         if ekg_signal is not None:
             f.create_dataset('ekg', data=ekg_signal)
         if resp_signal is not None:
             f.create_dataset('resp', data=resp_signal)
+
+        # General metadata
         meta_grp = f.create_group('metadata')
         for k, v in metadata.items():
             meta_grp.attrs[k] = v
+
+        # EKG-specific metadata
+        ekg_grp = f.create_group('ekg_metadata')
+        for k, v in ekg_meta.items():
+            ekg_grp.attrs[k] = v
+
+        # RESP-specific metadata
+        resp_grp = f.create_group('resp_metadata')
+        for k, v in resp_meta.items():
+            resp_grp.attrs[k] = v
+
 
 
 def convert_all_rec_to_h5(datapath, output_dir="h5_outputs"):
@@ -192,6 +191,7 @@ def convert_all_rec_to_h5(datapath, output_dir="h5_outputs"):
     print(f"Found {len(rec_files)} merged.rec files.")
 
     os.makedirs(output_dir, exist_ok=True)
+
 
     for rec_file in rec_files:
         fname = os.path.splitext(os.path.basename(rec_file))[0]
@@ -201,20 +201,15 @@ def convert_all_rec_to_h5(datapath, output_dir="h5_outputs"):
             print(f"Skipping {rec_file}: {e}")
             continue
 
-        ekg_signal, resp_signal, fs = get_data_from_rec_file(rec_file)
-
-        if fs is not None:
-            metadata['sampling_frequency'] = fs
-        else:
-            print(f"Could not determine sampling frequency for {rec_file}. Skipping export.")
+        ekg_signal, ekg_meta, resp_signal, resp_meta = get_data_from_rec_file(rec_file)
 
         output_h5 = os.path.join(output_dir, fname + ".h5")
-        export_to_h5(output_h5, ekg_signal, resp_signal, metadata)
+        export_to_h5(output_h5, ekg_signal, resp_signal, metadata, ekg_meta, resp_meta)
         print(f"Exported: {output_h5}")
 
 
 # Run this if executing the script
 if __name__ == "__main__":
     data_root = r"C:\Users\thoma\UFL Dropbox\Thomas Heeps\Padilla-Coreano Lab\2025\ECG_cohort1\Aim1\AIM1\Day1_new"
-    output_dir = r"C:\Users\thoma\Code\ResearchCode\respiratory_pilot\src\file_conversion\h5_with_fs"
+    output_dir = r"C:\Users\thoma\Code\ResearchCode\respiratory_pilot\src\file_conversion\updated_meta_h5"
     convert_all_rec_to_h5(data_root, output_dir=output_dir)

@@ -198,3 +198,6 @@ testing_data/
 ekg_resp_data/
 h5_outputs/
 temp_h5_backup/
+day1_h5_files/
+h5_with_fs/
+updated_meta_h5/

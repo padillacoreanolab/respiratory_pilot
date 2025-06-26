@@ -7,14 +7,25 @@ import warnings
 
 class Rsp_Kit:
 
-	def __init__(self, resp_data, fs, start_time, size, end_time=None, behavior_data=None):
+	def __init__(self, resp_data, fs, size, start_time=0, end_time=None, behavior_data=None):
 		"""
-		self.df = dataframe with respiratory signal, timestamp
-		self.time = time array for plotting
-		self.timestamps = timestamps for plotting
-		self.behavioral_maps = np.array([])  # Placeholder for behavioral data
-		self.peaks = None
-		self.high_frequency_areas = None
+		Initialize the Rsp_Kit object with respiratory data and optional behavioral data.
+		Respiratory data is expected to be a 1D numpy array.
+		Attributes:
+		-----------
+		resp_data : np.ndarray
+			1D array of respiratory signal data.
+		fs : float
+			Sampling frequency in Hz.
+		start_time : float
+			Start time of the recording in seconds.
+		size : float
+			Total duration of the recording in samples (not seconds).
+		end_time : float, optional
+			End time of the recording in seconds. If not provided, defaults to start_time + size
+		behavior_data : pd.DataFrame, optional
+			DataFrame containing behavioral events with columns 'Behavior', 'Start (s)', and 'Stop
+			 (s)'.
 		Parameters:
 		-----------
 		resp_data : np.ndarray
@@ -320,6 +331,13 @@ class Rsp_Kit:
 		time = plot_data["Timestamps"].values
 		resp_values = plot_data["Respiration Value"].values
 
+		# if peak_sel or peak_thresh are not provided, set defaults based on the data
+		if peak_sel is None:
+			peak_sel = (np.max(resp_values) - np.min(resp_values)) / 4
+		if peak_thresh is None:
+			peak_thresh = np.percentile(resp_values, 90) * 0.2  # Or use mean + std
+
+
 		# Create the plot
 		plt.figure(figsize=figsize)
 		plt.plot(time, resp_values, 'b-', linewidth=1, label="Respiration Signal")
@@ -381,10 +399,17 @@ class Rsp_Kit:
 					plt.fill_between(time[behavior_mask], resp_values.min(), resp_values.max(), 
 									color=behavior_colors[behavior], alpha=0.3, label=behavior)
 
-		# Add labels and title
+		# Add labels and dynamic title
 		plt.xlabel('Time (seconds)')
 		plt.ylabel('Amplitude')
-		plt.title(f'{title}- First {duration} Seconds')
+
+		if start_time == 0:
+			title_suffix = f"First {duration} Seconds"
+		else:
+			title_suffix = f"{start_time}-{start_time + duration} Seconds"
+
+		plt.title(f"{title} - {title_suffix}")
+
 
 		# Add grid and legend
 		plt.grid(False, alpha=0.3)
