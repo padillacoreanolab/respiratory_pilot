@@ -211,5 +211,5 @@ def convert_all_rec_to_h5(datapath, output_dir="h5_outputs"):
 # Run this if executing the script
 if __name__ == "__main__":
     data_root = r"C:\Users\thoma\UFL Dropbox\Thomas Heeps\Padilla-Coreano Lab\2025\ECG_cohort1\Aim1\AIM1\Day1_new"
-    output_dir = r"C:\Users\thoma\Code\ResearchCode\respiratory_pilot\src\file_conversion\updated_meta_h5"
+    output_dir = r"C:\Users\thoma\Code\ResearchCode\respiratory_pilot\src\file_conversion\updated_twice_analog_h5_outputs"
     convert_all_rec_to_h5(data_root, output_dir=output_dir)
