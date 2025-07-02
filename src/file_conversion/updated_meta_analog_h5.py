@@ -23,6 +23,10 @@ def get_metadata_from_rec_name(rec_name):
     Returns dict with subject ID, agent info, date/time, etc.
     """
     pattern = r"(BLRI|RI\d)_s(\d+)_(\d+)_p(\d+)_(\d+)_(n?RB\d+)_(\d{8})_(\d{6})_merged"
+
+    rec_name_cleaned = rec_name.replace("n_RB", "nRB").replace("n__RB", "nRB")
+    match = re.match(pattern, rec_name_cleaned)
+
     match = re.match(pattern, rec_name)
     if not match:
         raise ValueError(f"Filename {rec_name} doesn't match expected pattern!")
@@ -87,6 +91,7 @@ def parse_fields(field_str):
     return np.dtype(dtype_spec)
 
 
+
 def organize_single_trodes_export(dir_path):
     result = {}
     for file_name in os.listdir(dir_path):
@@ -99,6 +104,22 @@ def organize_single_trodes_export(dir_path):
             print(f"Skipping {file_name}: {e}")
     return result
 
+
+'''
+def organize_single_trodes_export(dir_path):
+    result = {}
+    for file_name in os.listdir(dir_path):
+        if "raw_group0" in file_name or file_name.endswith(".txt"):
+            continue
+        sub_key = file_name.rsplit(".", 2)[-2]
+        try:
+            result[sub_key] = read_trodes_extracted_data_file(os.path.join(dir_path, file_name))
+        except Exception as e:
+            # Only print if it's not the known/expected error, or just skip silently
+            # Or, if you want to be really sure, just skip any file that fails
+            continue
+    return result
+'''
 
 def organize_all_trodes_export(dir_path):
     result = defaultdict(dict)
