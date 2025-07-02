@@ -581,46 +581,48 @@ class Rsp_Kit:
 		else:
 			plt.show()
 
-
-	def plot_each_behavior_event(self, figsize=(12, 6), show_peaks=False, save_dir=None, max_behavior_duration=5, pre_behavior=1, post_behavior=0):
+	def plot_each_behavior_event(
+			self, figsize=(12, 6), show_peaks=False, save_dir=None, 
+			max_behavior_duration=5, pre_behavior=1, post_behavior=0, 
+			exclude=None, peak_sel=None, peak_thresh=None):
 		"""
 		For each behavior event, plot a window from 1s before start to the end of the behavior,
 		or cutoff after 5 seconds if the behavior is longer.
 		Parameters:
-			figsize: tuple, figure size
-			show_peaks: bool, show peaks in each plot
-			save_dir: str or None, directory to save plots, if None just shows them
-			max_behavior_duration: float, max seconds to plot after behavior start
-			pre_behavior: float, seconds to show before behavior start
+			... (as before) ...
+			peak_sel: float or None. Selectivity for peak detection. Defaults to (max-min)/4 for each window.
+			peak_thresh: float or None. Threshold for peak detection. Defaults to 0.2 * 90th percentile for each window.
 		"""
+
 		if "Behavioral Event" not in self.df.columns:
 			print("No behavioral event data to plot.")
 			return
 
-		# Drop NAs and get all behavior rows
-		behavior_rows = self.df.dropna(subset=["Behavioral Event"])
-		# Group by each behavior start/stop
+		if exclude is not None:
+			if isinstance(exclude, str):
+				exclude = [exclude]
+			exclude = set(exclude)
+
 		event_df = self.behavior_data.copy()
 
-		# For unique events in the original table
 		for idx, row in event_df.iterrows():
 			behavior = row["Behavior"]
 			start = row["Start (s)"]
 			stop = row["Stop (s)"]
 			behavior_time = stop - start
 
-			# Determine plot window
+			# --- EXCLUDE CHECK ---
+			if exclude is not None and behavior in exclude:
+				print(f"Skipping behavior '{behavior}' (excluded).")
+				continue
+
 			plot_start = max(start - pre_behavior, self.df["Timestamps"].iloc[0])
 
-			print(f"behavior is {behavior_time} seconds, max duration is {max_behavior_duration} seconds")
 			if behavior_time > max_behavior_duration:
-				# If behavior is longer than max duration, plot only up to max duration
 				plot_stop = min(stop, start + max_behavior_duration)
-			else: # If behavior is shorter, include post behavior period
-				plot_stop = min(stop, start + max_behavior_duration + post_behavior)
-				print(plot_stop)
+			else:
+				plot_stop = min(stop + post_behavior, start + max_behavior_duration)
 
-			# Build mask for this window
 			mask = (self.df["Timestamps"] >= plot_start) & (self.df["Timestamps"] <= plot_stop)
 			window_df = self.df[mask]
 
@@ -634,27 +636,23 @@ class Rsp_Kit:
 			plt.figure(figsize=figsize)
 			plt.plot(time, resp, color='black', linewidth=1, label="Respiration Signal")
 
-			# Shade the actual behavior period within the plot
 			beh_mask = (time >= start) & (time <= stop)
 			if beh_mask.any():
 				plt.fill_between(time[beh_mask], resp.min(), resp.max(), alpha=0.3, color="gray", label=behavior)
 
-			# Optionally plot peaks
 			if show_peaks:
-				from rsp.data_processing.signal_processing import peakfinder  # Or use self._find_peaks
-				peak_sel = (resp.max() - resp.min()) / 4
-				peak_thresh = np.percentile(resp, 90) * 0.2
-				peak_inds, peak_mags = peakfinder(resp, sel=peak_sel, thresh=peak_thresh)
+				from rsp.data_processing.signal_processing import peakfinder
+				# Use provided peak_sel/peak_thresh if available, otherwise use default for this window
+				local_sel = (resp.max() - resp.min()) / 4 if peak_sel is None else peak_sel
+				local_thresh = np.percentile(resp, 90) * 0.2 if peak_thresh is None else peak_thresh
+				peak_inds, peak_mags = peakfinder(resp, sel=local_sel, thresh=local_thresh)
 				plt.scatter(time[peak_inds.astype(int)], peak_mags, color='red', label="Peaks", zorder=3)
 
 			plt.xlabel("Time (seconds)")
-			plt.title(f"{behavior} | {start:.2f}s - {stop:.2f}s (Plot: {plot_start:.2f}s to {plot_stop:.2f}s)")
-
-			# Remove grid and y-axis values
+			plt.title(f"{behavior} | {start-pre_behavior:.2f}s - {stop+post_behavior:.2f}s (Plot: {plot_start:.2f}s to {plot_stop:.2f}s)")
 			plt.grid(False)
-			plt.gca().set_yticklabels([])  # Hide y-axis tick labels
-			plt.gca().set_yticks([])       # Remove y-axis ticks
-
+			plt.gca().set_yticklabels([])
+			plt.gca().set_yticks([])
 			plt.legend()
 			plt.tight_layout()
 
@@ -667,6 +665,7 @@ class Rsp_Kit:
 				plt.close()
 			else:
 				plt.show()
+
 
 
 	def save_plot(self, filename):
