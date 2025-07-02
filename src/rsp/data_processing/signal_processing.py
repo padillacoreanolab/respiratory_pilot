@@ -279,3 +279,20 @@ def compute_frequency_change(resp_df, fs, pre_event_window=2, post_event_window=
     behavior_freq_changes = pd.DataFrame(results)
     
     return behavior_freq_changes
+
+
+def mask_signal_loss(signal, fs, window_sec=5, std_thresh=0.02, verbose=False):
+    """Return signal with signal-loss windows replaced with NaN."""
+    win_size = int(window_sec * fs)
+    signal = signal.copy()
+    for start in range(0, len(signal), win_size):
+        end = min(start + win_size, len(signal))
+        window = signal[start:end]
+        if verbose:
+            print(f"Checking window {start/fs:.2f}s to {end/fs:.2f}s with std {np.std(window):.4f}")
+        # Mask if window is too flat (std below threshold)
+        if np.std(window) < std_thresh:
+            signal[start:end] = np.nan
+    if verbose:
+        print(f"Masked {np.sum(np.isnan(signal))} samples due to signal loss.")
+    return signal

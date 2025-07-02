@@ -201,3 +201,6 @@ temp_h5_backup/
 day1_h5_files/
 h5_with_fs/
 updated_meta_h5/
+plots/
+overlay_plots/
+updated_twice_analog_h5_outputs/

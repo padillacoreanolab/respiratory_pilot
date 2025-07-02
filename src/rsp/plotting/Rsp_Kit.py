@@ -285,10 +285,11 @@ class Rsp_Kit:
 	# final_resp_plot code
 	def plot(self, start_time=0, duration=10, figsize=(12, 6), show_peaks=False, 
 					peak_sel=None, peak_thresh=None, behavior_data=False, show_high_freq_regions=False, 
-					high_freq_window=5, high_freq_threshold_percentile=30, title="Respiratory Signal"):
+					high_freq_window=5, high_freq_threshold_percentile=30, nan_plot=False, save=False, title="Respiratory Signal"):
 		"""
 		Plot respiratory data for a given duration with optional peak detection, behavior event overlays,
-		and high-frequency breathing region identification.
+		and high-frequency breathing region identification. Note that this method uses it's own default method of finding peaks
+		and does not use the peakfinder from data_processing.signal_processing if peak_sel or peak_thresh are not provided.
 
 		Parameters:
 		-----------
@@ -331,12 +332,16 @@ class Rsp_Kit:
 		time = plot_data["Timestamps"].values
 		resp_values = plot_data["Respiration Value"].values
 
+		if nan_plot:
+			nan_mask = np.isnan(resp_values)
+			resp_values[nan_mask] = 0
+			print(resp_values[nan_mask])
+
 		# if peak_sel or peak_thresh are not provided, set defaults based on the data
 		if peak_sel is None:
 			peak_sel = (np.max(resp_values) - np.min(resp_values)) / 4
 		if peak_thresh is None:
 			peak_thresh = np.percentile(resp_values, 90) * 0.2  # Or use mean + std
-
 
 		# Create the plot
 		plt.figure(figsize=figsize)
@@ -385,23 +390,48 @@ class Rsp_Kit:
 								label="High-Frequency Region" if first_label else None)
 				first_label = False  # Only add label once to avoid duplicate legends
 
+		if behavior_data:
+			print(self.df.columns)
+
 		# Add behavior event overlays if behavioral_data is True
-		if behavior_data and "Behavior" in self.df.columns:
+		if behavior_data and "Behavioral Event" in plot_data.columns:
+			print("Behavioral data is present, overlaying behavior events.")
+
 			behavior_colors = {
-				"Facial": "blue",
-				"Anogenital": "green",
+				"facial sniffing": "blue",
+				"anogenital sniffing": "green",
 				"Flank": "red",
 				"sniffing object": "purple",
 			}
-			for behavior in plot_data["Behavior"].dropna().unique():
+
+			behaviors = plot_data["Behavioral Event"].dropna().unique()
+			for behavior in behaviors:
 				if behavior in behavior_colors:
-					behavior_mask = plot_data["Behavior"] == behavior
-					plt.fill_between(time[behavior_mask], resp_values.min(), resp_values.max(), 
-									color=behavior_colors[behavior], alpha=0.3, label=behavior)
+					# Get all indices where this behavior occurs
+					mask = plot_data["Behavioral Event"] == behavior
+					behavior_times = time[mask]
+
+					# Find contiguous regions (splits at gaps >1 sample apart)
+					if len(behavior_times) > 0:
+						splits = np.where(np.diff(behavior_times) > (1.1 / self.fs))[0]  # >1.1/fs sec gap = new event
+						# Start and stop indices for each region
+						segment_starts = np.insert(behavior_times[0], 0, behavior_times[0])
+						segment_stops = np.append(behavior_times[splits], behavior_times[-1])
+						segment_starts = np.insert(behavior_times[splits+1], 0, behavior_times[0])
+						segment_stops = np.append(behavior_times[splits], behavior_times[-1])
+
+						for start, stop in zip(segment_starts, segment_stops):
+							event_mask = (time >= start) & (time <= stop)
+							plt.fill_between(
+								time[event_mask],
+								resp_values.min(), resp_values.max(),
+								color=behavior_colors[behavior], alpha=0.3, label=behavior
+							)
+
 
 		# Add labels and dynamic title
 		plt.xlabel('Time (seconds)')
-		plt.ylabel('Amplitude')
+		# plt.ylabel('Amplitude')
 
 		if start_time == 0:
 			title_suffix = f"First {duration} Seconds"
@@ -410,14 +440,146 @@ class Rsp_Kit:
 
 		plt.title(f"{title} - {title_suffix}")
 
+		# Remove grid and y-axis values
+		plt.grid(False)
+		plt.gca().set_yticklabels([])  # Hide y-axis tick labels
+		plt.gca().set_yticks([])       # Remove y-axis ticks
 
-		# Add grid and legend
+		plt.tight_layout()
+		if save:
+			return plt.gcf()
+		else:
+			plt.show()
+
+
+
+	def plot_overlay(self, rsp2, start_time=0, duration=10, figsize=(12, 6), show_peaks=False,
+					peak_sel=None, peak_thresh=None, behavioral_data=False, show_high_freq_regions=False,
+					high_freq_window=5, high_freq_threshold_percentile=30, nan_plot=False, save=False, title="Overlayed Respiratory Signal"):
+		"""
+		Overlay plot of respiratory signals from two Rsp_Kit objects.
+
+		Parameters:
+		-----------
+		self : Rsp_Kit
+			The current Rsp_Kit object containing the first respiratory signal.
+		rsp2 : Rsp_Kit
+			Another Rsp_Kit object containing the second respiratory signal.
+		start_time : float
+			Start time of the recording.
+		fs : float
+			Sampling frequency in Hz.
+		start_time : float
+			Start time of the recording.
+		duration : int, optional
+			Duration of time (in seconds) to display in the plot (default: 10).
+		figsize : tuple, optional
+			Figure n_samples (width, height) in inches.
+		show_peaks : bool, optional
+			Whether to detect and plot peaks in the respiratory signal (default: False).
+		peak_sel : float, optional
+			Selectivity threshold for peak detection. If None, defaults to (max - min) / 4.
+		peak_thresh : float, optional
+			Minimum threshold for detected peaks.
+		behavioral_data : bool, optional
+			Whether to overlay behavioral event data (default: False).
+		show_high_freq_regions : bool, optional
+			Whether to identify and highlight high-frequency breathing regions (default: False).
+		high_freq_window : int, optional
+			Number of peaks to use for the moving average of inter-peak distances (default: 5).
+		high_freq_threshold_percentile : float, optional
+			Percentile value to determine high-frequency regions (default: 30 means areas with the lowest 30% of inter-peak intervals).
+
+		"""
+
+		def _plot_trace(rsp_obj, color, label_prefix):
+			mask = (rsp_obj.df["Timestamps"] >= start_time) & (rsp_obj.df["Timestamps"] <= time_end)
+			plot_data = rsp_obj.df[mask]
+			if plot_data.empty:
+				print(f"No data for {label_prefix} in range {start_time}–{time_end}.")
+				return [], np.array([]), np.array([])
+
+			time = plot_data["Timestamps"].values
+			resp_values = plot_data["Respiration Value"].values
+			
+			if nan_plot:
+				# turn NaN values into 0's
+				resp_values[np.isnan(resp_values)] = 0
+
+			plt.plot(time, resp_values, color=color, linewidth=1, label=f"{label_prefix} Respiration")
+
+			if show_peaks:
+				local_sel = (np.max(resp_values) - np.min(resp_values)) / 4 if peak_sel is None else peak_sel
+				local_thresh = np.percentile(resp_values, 90) * 0.2 if peak_thresh is None else peak_thresh
+				peak_inds, peak_mags = peakfinder(resp_values, sel=local_sel, thresh=local_thresh)
+				peak_times = time[peak_inds.astype(int)]
+				plt.scatter(peak_times, peak_mags, color=color, edgecolor='black',
+							label=f"{label_prefix} Peaks", zorder=3)
+			else:
+				peak_times = np.array([])
+
+			# High-frequency region highlighting
+			if show_high_freq_regions and len(peak_times) > 1:
+				inter_peak_intervals = np.diff(peak_times)
+				smoothed_ipi = np.convolve(inter_peak_intervals,
+										np.ones(high_freq_window)/high_freq_window, mode='valid') \
+					if len(inter_peak_intervals) >= high_freq_window else inter_peak_intervals
+				threshold = np.percentile(smoothed_ipi, high_freq_threshold_percentile)
+				high_freq_regions = []
+				start_region = None
+				for i, ipi in enumerate(smoothed_ipi):
+					if ipi < threshold:
+						if start_region is None:
+							start_region = peak_times[i]
+					elif start_region is not None:
+						high_freq_regions.append((start_region, peak_times[i]))
+						start_region = None
+				if start_region is not None:
+					high_freq_regions.append((start_region, peak_times[-1]))
+
+				for start, end in high_freq_regions:
+					mask = (time >= start) & (time <= end)
+					plt.fill_between(time[mask], resp_values.min(), resp_values.max(), color=color, alpha=0.2)
+
+			# Behavioral overlays
+			if behavioral_data and "Behavior" in plot_data.columns:
+				behavior_colors = {
+					"Facial": "blue",
+					"Anogenital": "green",
+					"Flank": "red",
+					"sniffing object": "purple",
+				}
+				for behavior in plot_data["Behavior"].dropna().unique():
+					if behavior in behavior_colors:
+						behavior_mask = plot_data["Behavior"] == behavior
+						plt.fill_between(time[behavior_mask], resp_values.min(), resp_values.max(),
+										color=behavior_colors[behavior], alpha=0.2,
+										label=f"{label_prefix} - {behavior}")
+
+			return time, resp_values, peak_times
+
+		# Setup
+		time_end = start_time + duration
+		plt.figure(figsize=figsize)
+
+		# Plot self and rsp2
+		_ = _plot_trace(self, color='red', label_prefix='Filtered Signal')
+		_ = _plot_trace(rsp2, color='green', label_prefix='Resp2 | Should be Unfiltered Signal')
+
+		# Labels and layout
+		plt.xlabel("Time (seconds)")
+		plt.ylabel("Amplitude")
+		title_suffix = f"{start_time}-{start_time + duration} Seconds"
+		plt.title(f"{title} - {title_suffix}")
 		plt.grid(False, alpha=0.3)
 		plt.legend()
-
-		# Adjust layout to prevent label cutoff
 		plt.tight_layout()
-		plt.show()
+		if save:
+			return plt.gcf()
+		else:
+			plt.show()
+
+
 
 	def save_plot(self, filename):
 		"""Save the last plot to a file."""
