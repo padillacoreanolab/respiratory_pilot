@@ -649,7 +649,7 @@ class Rsp_Kit:
 				plt.scatter(time[peak_inds.astype(int)], peak_mags, color='red', label="Peaks", zorder=3)
 
 			plt.xlabel("Time (seconds)")
-			plt.title(f"{behavior} | {start-pre_behavior:.2f}s - {stop+post_behavior:.2f}s (Plot: {plot_start:.2f}s to {plot_stop:.2f}s)")
+			plt.title(f"{behavior} | {start-pre_behavior:.2f}s - {stop+post_behavior:.2f}s (Behavior: {start:.2f}s to {stop:.2f}s)")
 			plt.grid(False)
 			plt.gca().set_yticklabels([])
 			plt.gca().set_yticks([])
