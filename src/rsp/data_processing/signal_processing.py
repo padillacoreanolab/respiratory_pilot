@@ -281,6 +281,7 @@ def compute_frequency_change(resp_df, fs, pre_event_window=2, post_event_window=
     return behavior_freq_changes
 
 
+# old chunking function
 def mask_signal_loss(signal, fs, window_sec=5, std_thresh=0.02, verbose=False):
     """Return signal with signal-loss windows replaced with NaN."""
     win_size = int(window_sec * fs)
@@ -295,4 +296,47 @@ def mask_signal_loss(signal, fs, window_sec=5, std_thresh=0.02, verbose=False):
             signal[start:end] = np.nan
     if verbose:
         print(f"Masked {np.sum(np.isnan(signal))} samples due to signal loss.")
+    return signal
+
+
+def mask_signal_loss_nested(signal, fs, window_sec=5, std_thresh=0.02, sub_win_sec=1, sub_std_thresh=None, verbose=False):
+    """
+    Return signal with signal-loss windows replaced with NaN, using nested sub-windows to preserve valid segments.
+    If a main window fails the std_thresh, it will check smaller sub-windows before masking the whole window.
+    """
+    win_size = int(window_sec * fs)
+    sub_win_size = int(sub_win_sec * fs)
+    signal = signal.copy()
+
+    if sub_std_thresh is None:
+        sub_std_thresh = std_thresh  # use same threshold unless specified
+
+    for start in range(0, len(signal), win_size):
+        end = min(start + win_size, len(signal))
+        window = signal[start:end]
+
+        window_std = np.std(window)
+        if verbose:
+            print(f"\nWindow {start/fs:.2f}s–{end/fs:.2f}s std = {window_std:.4f}")
+
+        if window_std < std_thresh:
+            # Try preserving sub-windows with valid signal
+            mask = np.ones(len(window), dtype=bool)
+            for sub_start in range(0, len(window), sub_win_size):
+                sub_end = min(sub_start + sub_win_size, len(window))
+                sub_win = window[sub_start:sub_end]
+                sub_std = np.std(sub_win)
+                if sub_std >= sub_std_thresh:
+                    if verbose:
+                        print(f"  ↳ Subwindow {sub_start/fs:.2f}s–{sub_end/fs:.2f}s std = {sub_std:.4f} (kept)")
+                    mask[sub_start:sub_end] = False  # don't mask this part
+                elif verbose:
+                    print(f"  ↳ Subwindow {sub_start/fs:.2f}s–{sub_end/fs:.2f}s std = {sub_std:.4f} (masked)")
+            # Apply masking
+            signal[start:end][mask] = np.nan
+        elif verbose:
+            print("  ↳ Window passed, not masking.")
+
+    if verbose:
+        print(f"\nFinal: Masked {np.sum(np.isnan(signal))} samples due to signal loss.")
     return signal
