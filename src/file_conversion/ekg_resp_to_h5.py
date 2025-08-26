@@ -6,6 +6,65 @@ from collections import defaultdict
 import spikeinterface.extractors as se
 
 
+"""
+===========================================================
+Trodes .rec → HDF5 Conversion Script
+===========================================================
+
+This script converts SpikeGadgets/Trodes `.rec` folders and 
+associated `.analog` exports into HDF5 files for analysis.
+
+Prerequisites
+-------------
+1. Python environment with required libraries installed:
+   - numpy
+   - h5py
+   - spikeinterface
+   - (optional) jupyter for interactive use
+
+   It is strongly recommended to use a conda or venv 
+   environment so dependencies are isolated.
+
+2. Trodes export folders (.rec + extracted .analog directories) 
+   should already be available, this is where we read data from.
+
+Usage
+-----
+- **From terminal** (recommended):
+    1. Edit the `data_root` path at the bottom of this file to 
+       point to the folder containing your `.rec` folders, the program will look
+       inside each folder and find the merge.rec file and find the other necessary 
+       files automatically.
+    2. Edit the `output_dir` path to a folder you want `.h5` files saved.
+    3. Run:
+       `python ekg_resp_to_h5.py`
+    4. Optional:
+        Go to testing_recs_plots.ipynb to analyze and plot the resulting .h5 files to check quickly if it worked.
+        Just copy paste one of the cells you see with the plots and change the path to the folder with your new h5s.
+
+- **From Jupyter notebook**:
+    1. Import the functions from this file or copy them into a cell.
+    2. Call:
+       `convert_all_rec_to_h5(data_root, output_dir="...")`
+
+What to change
+--------------
+- `data_root`  → the directory where your experiment’s 
+                 merged `.rec` files live.
+- `output_dir` → the folder where new `.h5` outputs should be written.
+
+Notes
+-----
+- Currently only RESP signals are exported as continuous data; 
+  EKG is not written, but EKG *metadata* (sampling rate, channels, etc.) 
+  is still included in the HDF5.
+- If RESP sampling rate is missing from Trodes exports (it is), the script 
+  will fall back to the EKG sampling frequency or a hard-coded 
+  default of 20 kHz. Both the hardcoded and EKG-based durations are 
+  included in the RESP metadata.
+"""
+
+
 def find_merged_rec_files(datapath):
     rec_files = []
     for root, dirs, files in os.walk(datapath):
@@ -14,7 +73,7 @@ def find_merged_rec_files(datapath):
                 rec_files.append(os.path.join(root, f))
     return rec_files
 
-
+'''
 def get_metadata_from_rec_name(rec_name):
     """
     Extracts structured metadata from a filename like:
@@ -41,8 +100,7 @@ def get_metadata_from_rec_name(rec_name):
         "date": f"{date[:4]}-{date[4:6]}-{date[6:]}",  # YYYY-MM-DD
         "time": f"{time[:2]}:{time[2:4]}:{time[4:]}"  # HH:MM:SS
     }
-
-
+'''
 
 def read_trodes_extracted_data_file(filename):
     with open(filename, "rb") as f:
@@ -143,20 +201,66 @@ def get_data_from_rec_file(rec_file):
     ekg_signal, resp_signal = None, None
     ekg_meta, resp_meta = {}, {}
 
-    # EKG from SpikeGadgets .rec via SpikeInterface
     try:
         ekg = se.read_spikegadgets(rec_file, stream_id='trodes')
-        ekg_signal = ekg.get_traces(channel_ids=['21']).flatten()
-
-        ekg_meta = {
-            'sampling_frequency': ekg.get_sampling_frequency(),
-            'channel_id': '21',
-            'num_samples': len(ekg_signal),
-            'duration_sec': len(ekg_signal) / ekg.get_sampling_frequency(),
-            'stream_id': 'trodes'
-        }
     except Exception as e:
-        print(f"Could not extract EKG: {e}")
+        print(f"Could not extract EKG: {e}, for file {rec_file}")
+        print("Will not get metadata, so fix this now")
+        return None, {}, None, {}
+    
+
+    # RESP from .analog folder
+    try:
+        parent_folder = os.path.dirname(rec_file)
+        resp = organize_all_trodes_export(parent_folder)
+        fname = os.path.basename(parent_folder)
+        resp_group = resp[fname]['analog']['analog_ECU_Ain1']
+
+        resp_signal = resp_group['data']['voltage'].astype(np.float32).ravel()
+
+        # Use EKG’s sampling frequency if RESP doesn't provide one
+        sf_ekg = None
+        try:
+            sf_ekg = float(ekg.get_sampling_frequency())
+        except Exception:
+            print("Could not get EKG sampling frequency, will use hard-coded 20kHz if RESP doesn't have it either")
+
+        # If Trodes analog doesn't have sample_rate, fall back to EKG or hard-coded 20k
+        resp_sr = float(resp_group.get('sample_rate', sf_ekg if sf_ekg is not None else 20000.0))
+
+        resp_meta = {
+            'sampling_frequency': resp_sr,
+            'start_time': resp_group.get('start_time', np.nan),
+            'num_samples': int(resp_signal.size),
+            'duration_sec': (resp_signal.size / resp_sr) if resp_sr else np.nan,
+            'channel': 'analog_ECU_Ain1',
+            'byte_order': resp_group.get('byte_order', 'unknown'),
+            'units': 'volts',
+            # for transparency/debug:
+            'duration_sec_from_ekg_sr': (resp_signal.size / sf_ekg) if sf_ekg else np.nan,
+            'duration_sec_hardcoded_20k': resp_signal.size / 20000.0,
+        }
+
+    except Exception as e:
+        print(f"Could not extract RESP: {e}")
+
+
+    '''
+        # EKG from SpikeGadgets .rec via SpikeInterface
+        try:
+            ekg = se.read_spikegadgets(rec_file, stream_id='trodes')
+            # ekg_signal = ekg.get_traces(channel_ids=['21']).flatten()
+        
+            ekg_meta = {
+                'sampling_frequency': ekg.get_sampling_frequency(),
+                'channel_id': '21',
+                'num_samples': len(ekg_signal),
+                'duration_sec': len(ekg_signal) / ekg.get_sampling_frequency(),
+                'stream_id': 'trodes'
+            }
+
+        except Exception as e:
+            print(f"Could not extract EKG: {e}")
 
     # RESP from .analog folder
     try:
@@ -166,24 +270,36 @@ def get_data_from_rec_file(rec_file):
         resp_group = resp[fname]['analog']['analog_ECU_Ain1']
 
         resp_signal = resp_group['data']['voltage'].astype(float)
-        resp_sr = resp_group['sample_rate'][()]
+        # resp_sr = resp_group['sample_rate'][()]
+        # resp_sr doesn't work since device doesn't record it, we use ekgs's sampling frequency instead
         resp_meta = {
-            'sampling_frequency': resp_sr,
+            'sampling_frequency': ekg.get_sampling_frequency(),  # Use EKG's sampling frequency for consistency
             'start_time': resp_group.get('start_time', np.nan),
             'num_samples': len(resp_signal),
-            'duration_sec': len(resp_signal) / resp_sr,
+            # 'duration_sec': len(resp_signal) / resp_sr,
+            'calculated_duration_sec': len(resp_signal) / ekg.get_sampling_frequency,
+            'hard_coded_duration_sec': len(resp_signal) / 20000,  # Assuming 20kHz if not specified
             'channel': 'analog_ECU_Ain1',
             'byte_order': resp_group.get('byte_order', 'unknown'),
             'units': 'volts'
         }
+
     except Exception as e:
         print(f"Could not extract RESP: {e}")
+    '''
 
     return ekg_signal, ekg_meta, resp_signal, resp_meta
 
 
 
 def export_to_h5(output_path, ekg_signal, resp_signal, metadata, ekg_meta, resp_meta):
+    '''
+    output_path: str, path to save the .h5 file
+    ekg_signal: np.ndarray or None, EKG signal data
+    resp_signal: np.ndarray or None, RESP signal data
+    metadata: dict, general metadata to store
+    ekg_meta: dict, EKG-specific metadata
+    '''
     with h5py.File(output_path, 'w') as f:
         if ekg_signal is not None:
             f.create_dataset('ekg', data=ekg_signal)
@@ -216,21 +332,26 @@ def convert_all_rec_to_h5(datapath, output_dir="h5_outputs"):
 
     for rec_file in rec_files:
         fname = os.path.splitext(os.path.basename(rec_file))[0]
+
+        '''
         try:
             metadata = get_metadata_from_rec_name(fname)
         except ValueError as e:
             print(f"Skipping {rec_file}: {e}")
             continue
+        '''
 
         ekg_signal, ekg_meta, resp_signal, resp_meta = get_data_from_rec_file(rec_file)
 
         output_h5 = os.path.join(output_dir, fname + ".h5")
-        export_to_h5(output_h5, ekg_signal, resp_signal, metadata, ekg_meta, resp_meta)
+        export_to_h5(output_h5, None, resp_signal, {}, ekg_meta, resp_meta)
         print(f"Exported: {output_h5}")
 
 
 # Run this if executing the script
 if __name__ == "__main__":
-    data_root = r"C:\Users\thoma\UFL Dropbox\Thomas Heeps\Padilla-Coreano Lab\2025\ECG_cohort1\Aim1\AIM1\Day1_new"
-    output_dir = r"C:\Users\thoma\Code\ResearchCode\respiratory_pilot\src\file_conversion\updated_twice_analog_h5_outputs"
+    # data_root = r"C:\Users\thoma\UFL Dropbox\Thomas Heeps\Padilla-Coreano Lab\2025\ECG_cohort1\Aim1\AIM1\Day1_new\CM interactions\10_day_isolation"
+    data_root = r"C:\Users\thoma\UFL Dropbox\Thomas Heeps\Padilla-Coreano Lab\2025\ECG_cohort1\Aim1\AIM1\Day1_new\CM interactions\Baseline cagemate interactions"
+
+    output_dir = r"C:\Users\thoma\Code\ResearchCode\respiratory_pilot\src\file_conversion\baseline_cagemate_interactions_h5_outputs"
     convert_all_rec_to_h5(data_root, output_dir=output_dir)
