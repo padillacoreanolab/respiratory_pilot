@@ -1,0 +1,19 @@
+name: biopipeline-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy=1.26.4
+  - pandas=2.2.3
+  - matplotlib
+  - scipy
+  - h5py
+  - pip
+  - pip:
+      - spikeinterface==0.100.6
+      - TDT==0.6.6
+      - NeuroKit2==0.2.10
+      - PyWavelets
+      - -e .
+
