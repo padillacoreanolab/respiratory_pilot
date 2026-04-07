@@ -49,7 +49,7 @@ Usage
 
 What to change
 --------------
-- `data_root`  → the directory where your experiment’s 
+- `data_root`  → the directory where your experiments 
                  merged `.rec` files live.
 - `output_dir` → the folder where new `.h5` outputs should be written.
 
