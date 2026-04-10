@@ -916,18 +916,27 @@ def get_feature_matrix(master_df, drop_incomplete=True):
 
 def sample_random_nonoverlapping_windows(
     time,
+    signal=None,
     window_dur=5.0,
     n_windows=100,
     seed=42,
     allow_partial_if_short=False,
+    dead_std_frac=0.02,
+    dead_ptp_frac=0.02,
+    dead_abs_std_floor=1e-6,
+    dead_abs_ptp_floor=1e-6,
 ):
     """
     Sample up to n_windows non-overlapping fixed-duration windows from a session.
+    Optionally rejects windows that appear "dead" (near-flat signal).
 
     Parameters
     ----------
     time : np.ndarray
         Session time vector in seconds.
+    signal : np.ndarray or None
+        Respiration signal aligned to `time`. If provided, windows whose
+        within-window variability is too low are excluded before random draw.
     window_dur : float
         Window duration in seconds.
     n_windows : int
@@ -937,6 +946,15 @@ def sample_random_nonoverlapping_windows(
     allow_partial_if_short : bool
         If True and session is shorter than one full window, return one
         clamped session-spanning window. If False, return [].
+    dead_std_frac : float
+        Fraction of global signal std used as the minimum window std threshold.
+    dead_ptp_frac : float
+        Fraction of global signal peak-to-peak range used as minimum window
+        range threshold.
+    dead_abs_std_floor : float
+        Absolute lower bound for window std threshold.
+    dead_abs_ptp_floor : float
+        Absolute lower bound for window range threshold.
 
     Returns
     -------
@@ -958,6 +976,35 @@ def sample_random_nonoverlapping_windows(
 
     if len(possible_starts) == 0:
         return []
+
+    # If signal is provided, drop candidate windows with very low variation.
+    if signal is not None:
+        signal = np.asarray(signal)
+        if len(signal) != len(time):
+            raise ValueError("signal and time must have the same length")
+
+        global_std = float(np.nanstd(signal))
+        global_ptp = float(np.nanmax(signal) - np.nanmin(signal))
+        min_std = max(dead_abs_std_floor, dead_std_frac * global_std)
+        min_ptp = max(dead_abs_ptp_floor, dead_ptp_frac * global_ptp)
+
+        valid_starts = []
+        for s in possible_starts:
+            e = s + window_dur
+            mask = (time >= s) & (time < e)
+            seg = signal[mask]
+            if seg.size == 0:
+                continue
+
+            seg_std = float(np.nanstd(seg))
+            seg_ptp = float(np.nanmax(seg) - np.nanmin(seg))
+            if np.isfinite(seg_std) and np.isfinite(seg_ptp):
+                if (seg_std >= min_std) and (seg_ptp >= min_ptp):
+                    valid_starts.append(float(s))
+
+        possible_starts = np.array(valid_starts, dtype=float)
+        if len(possible_starts) == 0:
+            return []
 
     n_use = min(n_windows, len(possible_starts))
 
