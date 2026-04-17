@@ -6,6 +6,8 @@
 import os
 import h5py
 import re
+from pathlib import Path
+from math import gcd
 
 # --- Numerical & data analysis ---
 import numpy as np
@@ -104,6 +106,140 @@ def load_clean_resp_signal(h5_file, target_rate=100):
     return rsp_cleaned, time_vector, target_rate, metadata
 
 
+
+
+
+# for cagemate rank data
+def load_clean_resp_signal_cagemate_rank(h5_path, target_rate=400):
+    """
+    Load cleaned respiration signal from the cagemate-rank H5 files.
+
+    Expected H5 structure for this dataset:
+        resp_clean/
+            signal
+            time
+
+    Why this loader is separate from the old one:
+    - Your valence dataset appears to use a different H5 layout.
+    - These cagemate files store the cleaned respiration under resp_clean/signal
+      rather than a top-level dataset named 'resp'.
+
+    Parameters
+    ----------
+    h5_path : str
+        Full path to one H5 recording.
+    target_rate : int or float
+        Desired output sampling rate after optional resampling.
+
+    Returns
+    -------
+    signal : np.ndarray or None
+        1D cleaned respiration signal.
+    time : np.ndarray or None
+        Time vector aligned to the returned signal.
+    fs_out : float or None
+        Final sampling rate after any resampling.
+    meta : dict
+        Useful metadata about loading/resampling.
+    """
+    try:
+        with h5py.File(h5_path, "r") as f:
+            # -------------------------------
+            # Confirm required structure exists
+            # -------------------------------
+            if "resp_clean" not in f:
+                raise KeyError("Missing group 'resp_clean'")
+
+            if "signal" not in f["resp_clean"]:
+                raise KeyError("Missing dataset 'resp_clean/signal'")
+
+            if "time" not in f["resp_clean"]:
+                raise KeyError("Missing dataset 'resp_clean/time'")
+
+            # -------------------------------
+            # Load cleaned respiration + time
+            # -------------------------------
+            raw_signal = np.asarray(f["resp_clean"]["signal"][:]).squeeze()
+            raw_time = np.asarray(f["resp_clean"]["time"][:]).squeeze()
+
+        # -------------------------------
+        # Basic shape checks
+        # -------------------------------
+        if raw_signal.ndim != 1:
+            raise ValueError(f"resp_clean/signal is not 1D. shape={raw_signal.shape}")
+
+        if raw_time.ndim != 1:
+            raise ValueError(f"resp_clean/time is not 1D. shape={raw_time.shape}")
+
+        if len(raw_signal) == 0 or len(raw_time) == 0:
+            raise ValueError("Signal or time array is empty")
+
+        # If lengths mismatch, trim to shortest so downstream code does not break
+        if len(raw_signal) != len(raw_time):
+            min_len = min(len(raw_signal), len(raw_time))
+            print(
+                f"Warning: signal/time length mismatch in {h5_path}. "
+                f"Trimming from signal={len(raw_signal)}, time={len(raw_time)} to {min_len}."
+            )
+            raw_signal = raw_signal[:min_len]
+            raw_time = raw_time[:min_len]
+
+        # -------------------------------
+        # Estimate original sampling rate from time vector
+        # -------------------------------
+        dt = np.diff(raw_time)
+        dt = dt[np.isfinite(dt)]
+
+        if len(dt) == 0:
+            raise ValueError("Could not estimate sampling rate from time vector")
+
+        median_dt = np.median(dt)
+        if median_dt <= 0:
+            raise ValueError(f"Non-positive median dt detected: {median_dt}")
+
+        original_fs = 1.0 / median_dt
+
+        # -------------------------------
+        # Resample if needed
+        # -------------------------------
+        if target_rate is not None and not np.isclose(original_fs, target_rate, rtol=1e-3):
+            # Use rational resampling for cleaner signal preservation
+            target_rate_int = int(round(target_rate))
+            original_fs_int = int(round(original_fs))
+
+            common_div = gcd(target_rate_int, original_fs_int)
+            up = target_rate_int // common_div
+            down = original_fs_int // common_div
+
+            signal = resample_poly(raw_signal, up, down)
+            fs_out = float(target_rate_int)
+            time = np.arange(len(signal)) / fs_out
+
+            resampled = True
+        else:
+            signal = raw_signal.astype(float, copy=False)
+            time = raw_time.astype(float, copy=False)
+            fs_out = float(original_fs)
+            resampled = False
+
+        meta = {
+            "h5_path": h5_path,
+            "source_group": "resp_clean",
+            "source_signal_key": "resp_clean/signal",
+            "source_time_key": "resp_clean/time",
+            "original_fs": float(original_fs),
+            "target_rate": None if target_rate is None else float(target_rate),
+            "final_fs": float(fs_out),
+            "resampled": resampled,
+            "n_samples": int(len(signal)),
+            "duration_sec": float(time[-1] - time[0]) if len(time) > 1 else 0.0,
+        }
+
+        return signal, time, fs_out, meta
+
+    except Exception as e:
+        print(f"Error loading {h5_path}: {e}")
+        return None, None, None, None
 
 
 def get_sniff_respiratory_rate(signal, time, sniff_start, sniff_end, sampling_rate=100):
@@ -511,179 +647,389 @@ def sample_baseline_windows(time, window_dur=5.0, n_windows=10,
 
 
 # =============================================================================
-# Core helper: extract per-bout features from an already-fitted bmObject
+# Core helper: extract per-window features from an already-fitted bmObject
 # =============================================================================
 
-def extract_bout_features(bm, bout_start_sec, bout_stop_sec):
+def extract_bout_features(
+    bm,
+    bout_start_sec,
+    bout_stop_sec,
+    min_breaths=4,
+    strict_within_window=False,
+):
     """
-    Given a fitted bmObject (rodentAirflow, estimateAllFeatures already called),
-    extract and aggregate all respiratory features for breaths whose inhale onset
-    falls within [bout_start_sec, bout_stop_sec].
+    Given a fitted bmObject (with estimateAllFeatures already called on the FULL
+    recording), aggregate respiratory features for breaths belonging to a time
+    window [bout_start_sec, bout_stop_sec].
+
+    Why we still fit BreathMetrics on the full recording first:
+    -----------------------------------------------------------
+    This helper does NOT detect breaths from scratch. It only:
+      1) selects breaths already detected by BreathMetrics
+      2) summarizes those breath-level measurements inside this window
+
+    That full-session fit is important because BreathMetrics estimates:
+      - inhale/exhale onsets
+      - pauses
+      - offsets
+      - durations
+      - volumes
+    using context from neighboring breaths and surrounding signal. Those
+    estimates are usually more reliable on the full recording than on tiny
+    clipped windows.
 
     Parameters
     ----------
-    bm               : fitted bmObject instance
-    bout_start_sec   : float, bout start in seconds
-    bout_stop_sec    : float, bout stop in seconds
+    bm : fitted bmObject
+        BreathMetrics object already fit on the full session.
+    bout_start_sec : float
+        Window start time in seconds.
+    bout_stop_sec : float
+        Window stop time in seconds.
+    min_breaths : int, default=4
+        Minimum number of breaths required to keep this window.
+
+        CHANGED:
+        The old code used 2 breaths. That is enough to compute some quantities,
+        but it is weak for variability-style features (CVs), pause fractions,
+        and volume summaries. Using 4 makes the window features more stable.
+    strict_within_window : bool, default=False
+        If False:
+            include a breath if its inhale onset falls inside the window.
+        If True:
+            require the full breath to fit within the window, using inhale onset
+            and exhale offset.
+
+        This is optional because the original behavior is reasonable for many ML
+        pipelines, but strict mode is useful as a sensitivity check.
 
     Returns
     -------
-    dict of aggregated features, or None if fewer than 2 breaths found in window
+    dict or None
+        Dictionary of aggregated features, or None if the window does not
+        contain enough valid breaths.
     """
 
-    # Convert bout times to samples
+    # -------------------------------------------------------------------------
+    # Convert requested window from seconds to samples because bmObject stores
+    # breath landmarks (onsets/offsets) in sample indices.
+    # -------------------------------------------------------------------------
     start_samp = bout_start_sec * bm.srate
     stop_samp  = bout_stop_sec  * bm.srate
 
-    # Find breath indices whose inhale onset falls inside this bout
-    inhale_onsets = np.array(bm.inhaleOnsets)
-    bout_mask = (inhale_onsets >= start_samp) & (inhale_onsets <= stop_samp)
+    # inhale_onsets:
+    #   sample index where each inhale begins
+    # Naming reason:
+    #   "onsets" is the actual BM term, and "inhale" makes clear this is the
+    #   start of the inhale phase, not the peak or offset.
+    inhale_onsets = np.asarray(bm.inhaleOnsets, dtype=float)
+
+    # -------------------------------------------------------------------------
+    # Decide which breaths belong to this window
+    # -------------------------------------------------------------------------
+    if strict_within_window:
+        # exhaleOffsets is stored as shape (1, n_breaths) in BM
+        exhale_offsets = np.asarray(bm.exhaleOffsets[0], dtype=float)
+
+        # CHANGED:
+        # In strict mode we require the breath to start inside the window AND
+        # finish inside the window. This gives a "cleaner" window definition,
+        # but will usually keep fewer breaths.
+        bout_mask = (
+            (inhale_onsets >= start_samp) &
+            (exhale_offsets <= stop_samp) &
+            (~np.isnan(exhale_offsets))
+        )
+    else:
+        # Original behavior:
+        # include a breath if its inhale onset happens inside the window.
+        #
+        # Why this mode still makes sense:
+        # the breath landmarks were estimated on the full session, so even if a
+        # breath extends slightly outside the window, the phase estimates are
+        # still coming from the full context rather than being re-fit locally.
+        bout_mask = (inhale_onsets >= start_samp) & (inhale_onsets <= stop_samp)
+
     bout_inds = np.where(bout_mask)[0]
 
-    if len(bout_inds) < 2:
-        # Not enough breaths to compute meaningful features
+    # CHANGED:
+    # old code required only 2 breaths. We now default to 4 because:
+    # - 2 breaths gives only 1 IBI
+    # - CV metrics become unstable
+    # - pause percentages become very coarse
+    if len(bout_inds) < min_breaths:
         return None
 
+    # n_breaths:
+    #   number of breaths contributing to this window summary
+    # Naming reason:
+    #   simple bookkeeping feature that also helps you later inspect whether
+    #   some windows are based on too little data.
     n_breaths = len(bout_inds)
 
-    # ------------------------------------------------------------------ #
-    # Breathing rate & IBI
-    # Computed from consecutive inhale onsets within the bout
-    # ------------------------------------------------------------------ #
+    # -------------------------------------------------------------------------
+    # 1) RATE / INTER-BREATH TIMING
+    # -------------------------------------------------------------------------
+    # bout_inhale_onsets:
+    #   inhale start times for only the breaths selected in this window
     bout_inhale_onsets = inhale_onsets[bout_inds]
-    ibis_samp = np.diff(bout_inhale_onsets)             # inter-breath intervals in samples
-    ibis_sec  = ibis_samp / bm.srate
 
-    mean_ibi          = np.mean(ibis_sec)
-    breathing_rate    = 1.0 / mean_ibi if mean_ibi > 0 else np.nan
-    cv_breathing_rate = np.std(ibis_sec) / mean_ibi if mean_ibi > 0 else np.nan
+    # ibis_sec:
+    #   inter-breath intervals in seconds, computed between consecutive inhale
+    #   onsets
+    # Naming reason:
+    #   IBI = inter-breath interval, a standard timing measure.
+    ibis_sec = np.diff(bout_inhale_onsets) / bm.srate
 
-    # ------------------------------------------------------------------ #
-    # Inhale durations
-    # ------------------------------------------------------------------ #
-    inhale_durs = bm.inhaleDurations[0, bout_inds]     # already in seconds
-    inhale_durs = inhale_durs[~np.isnan(inhale_durs)]
+    # If somehow we have no interval after filtering, stop here
+    if len(ibis_sec) == 0:
+        return None
 
-    mean_inhale_dur = np.nanmean(inhale_durs) if len(inhale_durs) > 0 else np.nan
-    cv_inhale_dur   = np.nanstd(inhale_durs) / mean_inhale_dur if mean_inhale_dur and mean_inhale_dur > 0 else np.nan
+    # mean_ibi_sec:
+    #   mean time between breath starts in seconds
+    # Naming reason:
+    #   explicit "_sec" suffix makes the units clear.
+    mean_ibi_sec = np.nanmean(ibis_sec)
 
-    # ------------------------------------------------------------------ #
-    # Exhale durations
-    # ------------------------------------------------------------------ #
-    # Exhale onsets are indexed the same as inhale onsets (one exhale per breath cycle)
-    exhale_durs = bm.exhaleDurations[0, bout_inds]
-    exhale_durs_clean = exhale_durs[~np.isnan(exhale_durs)]
+    # breathing_rate_hz:
+    #   breaths per second, derived from 1 / mean IBI
+    # Naming reason:
+    #   "_hz" here means events per second.
+    breathing_rate_hz = 1.0 / mean_ibi_sec if mean_ibi_sec > 0 else np.nan
 
-    mean_exhale_dur = np.nanmean(exhale_durs_clean) if len(exhale_durs_clean) > 0 else np.nan
-    cv_exhale_dur   = np.nanstd(exhale_durs_clean) / mean_exhale_dur if mean_exhale_dur and mean_exhale_dur > 0 else np.nan
+    # cv_ibi:
+    #   variability of inter-breath timing
+    #
+    # CHANGED:
+    # old code called this "cv_breathing_rate", but mathematically it was really
+    # CV of the breath intervals, not CV of rate itself. This new name is more
+    # honest and easier to interpret.
+    cv_ibi = np.nan
+    if len(ibis_sec) >= 2 and mean_ibi_sec > 0:
+        cv_ibi = np.nanstd(ibis_sec) / mean_ibi_sec
 
-    # ------------------------------------------------------------------ #
-    # Inhale/Exhale ratio
-    # ------------------------------------------------------------------ #
-    ie_ratio = mean_inhale_dur / mean_exhale_dur if (mean_inhale_dur and mean_exhale_dur and mean_exhale_dur > 0) else np.nan
+    # -------------------------------------------------------------------------
+    # 2) INHALE / EXHALE DURATIONS
+    # -------------------------------------------------------------------------
+    # These durations were already computed by BM from onset/offset landmarks on
+    # the full session, and BM stores them in seconds.
+    inhale_durs_sec = np.asarray(bm.inhaleDurations[0, bout_inds], dtype=float)
+    exhale_durs_sec = np.asarray(bm.exhaleDurations[0, bout_inds], dtype=float)
 
-    # ------------------------------------------------------------------ #
-    # Peak flows  (rodentAirflow only)
-    # ------------------------------------------------------------------ #
-    peak_insp_flows = bm.peakInspiratoryFlows[bout_inds]
-    peak_exp_flows  = bm.troughExpiratoryFlows[bout_inds]
+    inhale_durs_sec = inhale_durs_sec[~np.isnan(inhale_durs_sec)]
+    exhale_durs_sec = exhale_durs_sec[~np.isnan(exhale_durs_sec)]
 
-    mean_peak_insp_flow = np.nanmean(peak_insp_flows)
-    mean_peak_exp_flow  = np.nanmean(peak_exp_flows)
-    cv_peak_insp_flow   = np.nanstd(peak_insp_flows) / mean_peak_insp_flow if mean_peak_insp_flow and mean_peak_insp_flow != 0 else np.nan
+    # mean_inhale_dur_sec / mean_exhale_dur_sec:
+    #   average duration of inhale/exhale phases in this window
+    mean_inhale_dur_sec = np.nanmean(inhale_durs_sec) if inhale_durs_sec.size else np.nan
+    mean_exhale_dur_sec = np.nanmean(exhale_durs_sec) if exhale_durs_sec.size else np.nan
 
-    # ------------------------------------------------------------------ #
-    # Breath volumes  (rodentAirflow only)
-    # ------------------------------------------------------------------ #
-    inhale_vols = bm.inhaleVolumes[0, bout_inds]
-    exhale_vols = bm.exhaleVolumes[0, bout_inds]
-    inhale_vols_clean = inhale_vols[~np.isnan(inhale_vols)]
-    exhale_vols_clean = exhale_vols[~np.isnan(exhale_vols)]
+    # CVs only computed when there are enough values to make variability at
+    # least somewhat meaningful.
+    cv_inhale_dur = np.nan
+    if inhale_durs_sec.size >= 2 and mean_inhale_dur_sec > 0:
+        cv_inhale_dur = np.nanstd(inhale_durs_sec) / mean_inhale_dur_sec
 
-    mean_inhale_vol  = np.nanmean(inhale_vols_clean) if len(inhale_vols_clean) > 0 else np.nan
-    mean_exhale_vol  = np.nanmean(exhale_vols_clean) if len(exhale_vols_clean) > 0 else np.nan
-    mean_tidal_vol   = (mean_inhale_vol + mean_exhale_vol) if not (np.isnan(mean_inhale_vol) or np.isnan(mean_exhale_vol)) else np.nan
-    cv_tidal_vol     = np.nanstd(inhale_vols_clean) / mean_inhale_vol if mean_inhale_vol and mean_inhale_vol > 0 else np.nan
-    minute_vent      = breathing_rate * mean_tidal_vol if (not np.isnan(breathing_rate) and not np.isnan(mean_tidal_vol)) else np.nan
+    cv_exhale_dur = np.nan
+    if exhale_durs_sec.size >= 2 and mean_exhale_dur_sec > 0:
+        cv_exhale_dur = np.nanstd(exhale_durs_sec) / mean_exhale_dur_sec
 
-    # ------------------------------------------------------------------ #
-    # Inhale pause durations & duty cycles
-    # ------------------------------------------------------------------ #
-    inh_pause_durs = bm.inhalePauseDurations[0, bout_inds]   # already in seconds
-    inh_pause_durs_clean = inh_pause_durs[~np.isnan(inh_pause_durs)]
+    # ie_ratio:
+    #   inhale-to-exhale duration ratio
+    # Naming reason:
+    #   short for inhale/exhale ratio; common compact respiratory shorthand.
+    ie_ratio = (
+        mean_inhale_dur_sec / mean_exhale_dur_sec
+        if (
+            not np.isnan(mean_inhale_dur_sec) and
+            not np.isnan(mean_exhale_dur_sec) and
+            mean_exhale_dur_sec > 0
+        )
+        else np.nan
+    )
 
-    pct_inhale_pause    = len(inh_pause_durs_clean) / n_breaths
-    mean_inh_pause_dur  = np.nanmean(inh_pause_durs_clean) if len(inh_pause_durs_clean) > 0 else 0.0
-    cv_inh_pause_dur    = np.nanstd(inh_pause_durs_clean) / mean_inh_pause_dur if mean_inh_pause_dur > 0 else np.nan
+    # -------------------------------------------------------------------------
+    # 3) PEAK FLOW FEATURES
+    # -------------------------------------------------------------------------
+    # peakInspiratoryFlows / troughExpiratoryFlows come from BM's detected
+    # extrema on the full signal.
+    peak_insp_flows = np.asarray(bm.peakInspiratoryFlows[bout_inds], dtype=float)
+    peak_exp_flows  = np.asarray(bm.troughExpiratoryFlows[bout_inds], dtype=float)
 
-    # ------------------------------------------------------------------ #
-    # Exhale pause durations & duty cycles
-    # ------------------------------------------------------------------ #
-    exh_pause_durs = bm.exhalePauseDurations[0, bout_inds]
-    exh_pause_durs_clean = exh_pause_durs[~np.isnan(exh_pause_durs)]
+    # mean_peak_insp_flow / mean_peak_exp_flow:
+    #   average inspiratory and expiratory extrema amplitude
+    # Naming reason:
+    #   kept close to original naming for compatibility with your existing
+    #   pipeline and plots.
+    mean_peak_insp_flow = np.nanmean(peak_insp_flows) if peak_insp_flows.size else np.nan
+    mean_peak_exp_flow  = np.nanmean(peak_exp_flows) if peak_exp_flows.size else np.nan
 
-    pct_exhale_pause    = len(exh_pause_durs_clean) / n_breaths
-    mean_exh_pause_dur  = np.nanmean(exh_pause_durs_clean) if len(exh_pause_durs_clean) > 0 else 0.0
-    cv_exh_pause_dur    = np.nanstd(exh_pause_durs_clean) / mean_exh_pause_dur if mean_exh_pause_dur > 0 else np.nan
+    valid_peak_insp_flows = peak_insp_flows[~np.isnan(peak_insp_flows)]
 
-    # ------------------------------------------------------------------ #
-    # Duty cycles  (fraction of mean IBI spent in each phase)
-    # ------------------------------------------------------------------ #
-    inhale_duty_cycle       = mean_inhale_dur        / mean_ibi if mean_ibi > 0 else np.nan
-    exhale_duty_cycle       = mean_exhale_dur        / mean_ibi if mean_ibi > 0 else np.nan
-    inh_pause_duty_cycle    = (mean_inh_pause_dur * pct_inhale_pause) / mean_ibi if mean_ibi > 0 else np.nan
-    exh_pause_duty_cycle    = (mean_exh_pause_dur * pct_exhale_pause) / mean_ibi if mean_ibi > 0 else np.nan
+    cv_peak_insp_flow = np.nan
+    if valid_peak_insp_flows.size >= 2 and np.nanmean(valid_peak_insp_flows) != 0:
+        cv_peak_insp_flow = np.nanstd(valid_peak_insp_flows) / np.nanmean(valid_peak_insp_flows)
 
-    # ------------------------------------------------------------------ #
-    # Pack into dict
-    # ------------------------------------------------------------------ #
+    # -------------------------------------------------------------------------
+    # 4) VOLUME FEATURES
+    # -------------------------------------------------------------------------
+    inhale_vols = np.asarray(bm.inhaleVolumes[0, bout_inds], dtype=float)
+    exhale_vols = np.asarray(bm.exhaleVolumes[0, bout_inds], dtype=float)
+
+    inhale_vols = inhale_vols[~np.isnan(inhale_vols)]
+    exhale_vols = exhale_vols[~np.isnan(exhale_vols)]
+
+    mean_inhale_vol = np.nanmean(inhale_vols) if inhale_vols.size else np.nan
+    mean_exhale_vol = np.nanmean(exhale_vols) if exhale_vols.size else np.nan
+
+    # CHANGED:
+    # old name: mean_tidal_vol
+    #
+    # Reason for rename:
+    # this is not a perfectly paired per-breath tidal volume computation.
+    # It is mean inhale volume + mean exhale volume, so "proxy" is more honest.
+    mean_tidal_vol_proxy = (
+        mean_inhale_vol + mean_exhale_vol
+        if (not np.isnan(mean_inhale_vol) and not np.isnan(mean_exhale_vol))
+        else np.nan
+    )
+
+    # CHANGED:
+    # old code called this cv_tidal_vol, but it actually used inhale volumes
+    # only. Renaming it to cv_inhale_vol matches the math.
+    cv_inhale_vol = np.nan
+    if inhale_vols.size >= 2 and mean_inhale_vol > 0:
+        cv_inhale_vol = np.nanstd(inhale_vols) / mean_inhale_vol
+
+    # CHANGED:
+    # old name: minute_ventilation
+    #
+    # Reason for rename:
+    # breathing_rate_hz is breaths/second, so multiplying by volume gives a
+    # per-second proxy, not a literal per-minute quantity. This is still useful
+    # for ML, but the old name overclaimed physiological precision.
+    ventilation_proxy = (
+        breathing_rate_hz * mean_tidal_vol_proxy
+        if (not np.isnan(breathing_rate_hz) and not np.isnan(mean_tidal_vol_proxy))
+        else np.nan
+    )
+
+    # -------------------------------------------------------------------------
+    # 5) PAUSE FEATURES
+    # -------------------------------------------------------------------------
+    inh_pause_durs_sec = np.asarray(bm.inhalePauseDurations[0, bout_inds], dtype=float)
+    exh_pause_durs_sec = np.asarray(bm.exhalePauseDurations[0, bout_inds], dtype=float)
+
+    inh_pause_durs_sec = inh_pause_durs_sec[~np.isnan(inh_pause_durs_sec)]
+    exh_pause_durs_sec = exh_pause_durs_sec[~np.isnan(exh_pause_durs_sec)]
+
+    # pct_breaths_with_inhale_pause / pct_breaths_with_exhale_pause:
+    #   fraction of breaths in this window that contain that pause type
+    pct_breaths_with_inhale_pause = len(inh_pause_durs_sec) / n_breaths
+    pct_breaths_with_exhale_pause = len(exh_pause_durs_sec) / n_breaths
+
+    # If no pauses exist, using 0.0 is often more interpretable than NaN for
+    # the mean pause duration itself.
+    mean_inhale_pause_dur_sec = np.nanmean(inh_pause_durs_sec) if inh_pause_durs_sec.size else 0.0
+    mean_exhale_pause_dur_sec = np.nanmean(exh_pause_durs_sec) if exh_pause_durs_sec.size else 0.0
+
+    cv_inhale_pause_dur = np.nan
+    if inh_pause_durs_sec.size >= 2 and mean_inhale_pause_dur_sec > 0:
+        cv_inhale_pause_dur = np.nanstd(inh_pause_durs_sec) / mean_inhale_pause_dur_sec
+
+    cv_exhale_pause_dur = np.nan
+    if exh_pause_durs_sec.size >= 2 and mean_exhale_pause_dur_sec > 0:
+        cv_exhale_pause_dur = np.nanstd(exh_pause_durs_sec) / mean_exhale_pause_dur_sec
+
+    # -------------------------------------------------------------------------
+    # 6) DUTY CYCLES
+    # -------------------------------------------------------------------------
+    # Duty cycle = fraction of the average breath cycle spent in a phase.
+    inhale_duty_cycle = mean_inhale_dur_sec / mean_ibi_sec if mean_ibi_sec > 0 else np.nan
+    exhale_duty_cycle = mean_exhale_dur_sec / mean_ibi_sec if mean_ibi_sec > 0 else np.nan
+
+    # Pause duty cycles scale the mean pause duration by the fraction of breaths
+    # that actually contained the pause, which matches the logic used in the BM
+    # secondary-feature code.
+    inhale_pause_duty_cycle = (
+        (mean_inhale_pause_dur_sec * pct_breaths_with_inhale_pause) / mean_ibi_sec
+        if mean_ibi_sec > 0 else np.nan
+    )
+    exhale_pause_duty_cycle = (
+        (mean_exhale_pause_dur_sec * pct_breaths_with_exhale_pause) / mean_ibi_sec
+        if mean_ibi_sec > 0 else np.nan
+    )
+
+    # -------------------------------------------------------------------------
+    # Return a flat dictionary for downstream dataframe assembly
+    # -------------------------------------------------------------------------
     return {
+        # ---------------------------------------------------------------------
         # bookkeeping
-        "n_breaths"                         : n_breaths,
+        # ---------------------------------------------------------------------
+        "n_breaths": n_breaths,
 
-        # rate & timing
-        "breathing_rate_hz"                 : breathing_rate,
-        "mean_ibi_sec"                      : mean_ibi,
-        "cv_breathing_rate"                 : cv_breathing_rate,
+        # ---------------------------------------------------------------------
+        # rate / timing
+        # ---------------------------------------------------------------------
+        "breathing_rate_hz": breathing_rate_hz,
+        "mean_ibi_sec": mean_ibi_sec,
+        "cv_ibi": cv_ibi,
 
+        # ---------------------------------------------------------------------
         # inhale phase
-        "mean_inhale_dur_sec"               : mean_inhale_dur,
-        "cv_inhale_dur"                     : cv_inhale_dur,
+        # ---------------------------------------------------------------------
+        "mean_inhale_dur_sec": mean_inhale_dur_sec,
+        "cv_inhale_dur": cv_inhale_dur,
 
+        # ---------------------------------------------------------------------
         # exhale phase
-        "mean_exhale_dur_sec"               : mean_exhale_dur,
-        "cv_exhale_dur"                     : cv_exhale_dur,
+        # ---------------------------------------------------------------------
+        "mean_exhale_dur_sec": mean_exhale_dur_sec,
+        "cv_exhale_dur": cv_exhale_dur,
 
-        # inhale/exhale ratio
-        "ie_ratio"                          : ie_ratio,
+        # ---------------------------------------------------------------------
+        # inhale/exhale timing relationship
+        # ---------------------------------------------------------------------
+        "ie_ratio": ie_ratio,
 
-        # peak flows
-        "mean_peak_insp_flow"               : mean_peak_insp_flow,
-        "mean_peak_exp_flow"                : mean_peak_exp_flow,
-        "cv_peak_insp_flow"                 : cv_peak_insp_flow,
+        # ---------------------------------------------------------------------
+        # peak flow summaries
+        # ---------------------------------------------------------------------
+        "mean_peak_insp_flow": mean_peak_insp_flow,
+        "mean_peak_exp_flow": mean_peak_exp_flow,
+        "cv_peak_insp_flow": cv_peak_insp_flow,
 
-        # volumes
-        "mean_inhale_vol"                   : mean_inhale_vol,
-        "mean_exhale_vol"                   : mean_exhale_vol,
-        "mean_tidal_vol"                    : mean_tidal_vol,
-        "cv_tidal_vol"                      : cv_tidal_vol,
-        "minute_ventilation"                : minute_vent,
+        # ---------------------------------------------------------------------
+        # volume summaries
+        # ---------------------------------------------------------------------
+        "mean_inhale_vol": mean_inhale_vol,
+        "mean_exhale_vol": mean_exhale_vol,
+        "mean_tidal_vol_proxy": mean_tidal_vol_proxy,
+        "cv_inhale_vol": cv_inhale_vol,
+        "ventilation_proxy": ventilation_proxy,
 
-        # inhale pause
-        "pct_breaths_with_inhale_pause"     : pct_inhale_pause,
-        "mean_inhale_pause_dur_sec"         : mean_inh_pause_dur,
-        "cv_inhale_pause_dur"               : cv_inh_pause_dur,
-        "inhale_pause_duty_cycle"           : inh_pause_duty_cycle,
+        # ---------------------------------------------------------------------
+        # inhale pause summaries
+        # ---------------------------------------------------------------------
+        "pct_breaths_with_inhale_pause": pct_breaths_with_inhale_pause,
+        "mean_inhale_pause_dur_sec": mean_inhale_pause_dur_sec,
+        "cv_inhale_pause_dur": cv_inhale_pause_dur,
+        "inhale_pause_duty_cycle": inhale_pause_duty_cycle,
 
-        # exhale pause
-        "pct_breaths_with_exhale_pause"     : pct_exhale_pause,
-        "mean_exhale_pause_dur_sec"         : mean_exh_pause_dur,
-        "cv_exhale_pause_dur"               : cv_exh_pause_dur,
-        "exhale_pause_duty_cycle"           : exh_pause_duty_cycle,
+        # ---------------------------------------------------------------------
+        # exhale pause summaries
+        # ---------------------------------------------------------------------
+        "pct_breaths_with_exhale_pause": pct_breaths_with_exhale_pause,
+        "mean_exhale_pause_dur_sec": mean_exhale_pause_dur_sec,
+        "cv_exhale_pause_dur": cv_exhale_pause_dur,
+        "exhale_pause_duty_cycle": exhale_pause_duty_cycle,
 
-        # duty cycles
-        "inhale_duty_cycle"                 : inhale_duty_cycle,
-        "exhale_duty_cycle"                 : exhale_duty_cycle,
+        # ---------------------------------------------------------------------
+        # overall phase fractions
+        # ---------------------------------------------------------------------
+        "inhale_duty_cycle": inhale_duty_cycle,
+        "exhale_duty_cycle": exhale_duty_cycle,
     }
 
 
@@ -929,6 +1275,8 @@ def sample_random_nonoverlapping_windows(
     """
     Sample up to n_windows non-overlapping fixed-duration windows from a session.
     Optionally rejects windows that appear "dead" (near-flat signal).
+    Sampling is spread-aware: it first draws across temporal strata, then fills
+    any remaining slots with a distance-weighted random draw to reduce clumping.
 
     Parameters
     ----------
@@ -1008,11 +1356,46 @@ def sample_random_nonoverlapping_windows(
 
     n_use = min(n_windows, len(possible_starts))
 
-    chosen_starts = rng.choice(
-        possible_starts,
-        size=n_use,
-        replace=False
-    )
+    # Spread-aware random sampling:
+    # 1) stratified random draw over session timeline
+    # 2) if some strata are empty, fill remaining slots with a
+    #    distance-weighted random draw to avoid local clustering
+    starts_sorted = np.sort(possible_starts.astype(float))
+    session_last_start = t_end - window_dur
+    bin_edges = np.linspace(t_start, session_last_start, n_use + 1)
+
+    chosen_starts = []
+    chosen_set = set()
+    for i in range(n_use):
+        left = bin_edges[i]
+        right = bin_edges[i + 1]
+        if i == n_use - 1:
+            in_bin = starts_sorted[(starts_sorted >= left) & (starts_sorted <= right)]
+        else:
+            in_bin = starts_sorted[(starts_sorted >= left) & (starts_sorted < right)]
+        if in_bin.size == 0:
+            continue
+        s = float(rng.choice(in_bin))
+        chosen_starts.append(s)
+        chosen_set.add(s)
+
+    if len(chosen_starts) < n_use:
+        remaining = starts_sorted[~np.isin(starts_sorted, np.array(chosen_starts, dtype=float))]
+        while len(chosen_starts) < n_use and remaining.size > 0:
+            if len(chosen_starts) == 0:
+                idx = int(rng.integers(0, remaining.size))
+            else:
+                chosen_arr = np.array(chosen_starts, dtype=float)
+                # Favor candidates farther from already selected windows.
+                min_dists = np.min(np.abs(remaining[:, None] - chosen_arr[None, :]), axis=1)
+                weights = min_dists + 1e-12
+                probs = weights / weights.sum()
+                idx = int(rng.choice(np.arange(remaining.size), p=probs))
+
+            s = float(remaining[idx])
+            chosen_starts.append(s)
+            chosen_set.add(s)
+            remaining = remaining[remaining != s]
 
     windows = sorted((float(s), float(s + window_dur)) for s in chosen_starts)
     return windows
@@ -1059,3 +1442,211 @@ def extract_features_from_windows(
         rows.append(row)
 
     return rows
+
+
+# --- Rank / cagemate (paired mice) extraction ---------------------------------
+
+_RANK_PRE_RE = re.compile(r"^(\d+_\d+)_2_([dis])$")
+_RANK_POST_RE = re.compile(r"^(.+)_([dis])_(\d{8}_\d{6})$")
+
+
+def canonical_rank_recording_basename(path_or_name, rename_map):
+    """
+    Map an on-disk .h5 basename to the canonical (renamed) basename from rename_map.
+
+    Original cohort filenames are keys; values embed standardized mouse IDs and _SUB/_DOM.
+    If the file is already canonical or unlisted, returns basename unchanged.
+    """
+    base = os.path.basename(str(path_or_name))
+    lookup = base.replace(".rec.h5", ".h5")
+    if lookup in rename_map:
+        return rename_map[lookup]
+    if base in rename_map:
+        return rename_map[base]
+    return base
+
+
+def parse_rank_cagemate_canonical_basename(canonical_basename):
+    """
+    Parse metadata from a canonical rank .h5 name (rename_map value).
+
+    The first mouse token (before ``_2_<role>_cm_``) is the recorded-airflow subject.
+    Rank for that mouse is encoded as ``_SUB`` / ``_DOM`` before ``.h5``.
+    Returns None if the name does not match the expected pattern.
+    """
+    base = os.path.basename(str(canonical_basename))
+    stem = base.rsplit(".", 1)[0]
+    rank = None
+    if stem.endswith("_SUB"):
+        rank = "Subordinate"
+        stem = stem[: -len("_SUB")]
+    elif stem.endswith("_DOM"):
+        rank = "Dominant"
+        stem = stem[: -len("_DOM")]
+    else:
+        return None
+
+    if "_cm_" not in stem:
+        return None
+    pre, post = stem.split("_cm_", 1)
+    m_pre, m_post = _RANK_PRE_RE.match(pre), _RANK_POST_RE.match(post)
+    if not m_pre or not m_post:
+        return None
+
+    subject_id = m_pre.group(1)
+    partner_id = m_post.group(1)
+    session_stamp = m_post.group(3)
+    partner_rank = "Dominant" if rank == "Subordinate" else "Subordinate"
+    dyad_tokens = sorted([subject_id, partner_id])
+    dyad_id = f"{dyad_tokens[0]}__{dyad_tokens[1]}"
+
+    return {
+        "subject_id": subject_id,
+        "partner_id": partner_id,
+        "dyad_id": dyad_id,
+        "rank_recorded_mouse": rank,
+        "partner_rank": partner_rank,
+        "session_stamp": session_stamp,
+        "subject_side_role": m_pre.group(2),
+        "partner_side_role": m_post.group(2),
+    }
+
+
+def build_rank_cagemate_resp_paths_from_dir(h5_dir, rename_map):
+    """
+    Build trial_id -> absolute path for cagemate rank .h5 files under ``h5_dir``.
+
+    Trial keys are the canonical recording stem (``rename_map`` value without ``.h5``),
+    so they align with ``Recording`` in :func:`build_rank_cagemate_window_feature_matrix`.
+
+    Only files whose canonical basename parses with
+    :func:`parse_rank_cagemate_canonical_basename` are included (unknown files are skipped).
+    If both ``name.h5`` and ``name.rec.h5`` map to the same canonical recording, the
+    non-``.rec`` file is preferred.
+    """
+    from collections import defaultdict
+
+    h5_dir = Path(h5_dir)
+    candidates = defaultdict(list)
+    for p in sorted(h5_dir.iterdir()):
+        if not p.is_file():
+            continue
+        low = p.name.lower()
+        if not low.endswith(".h5"):
+            continue
+        canonical_name = canonical_rank_recording_basename(p, rename_map)
+        if parse_rank_cagemate_canonical_basename(canonical_name) is None:
+            continue
+        trial_key = Path(canonical_name).stem
+        candidates[trial_key].append(p)
+
+    out = {}
+    for trial_key, plist in candidates.items():
+        plain = [x for x in plist if not x.name.lower().endswith(".rec.h5")]
+        chosen = plain[0] if plain else plist[0]
+        out[trial_key] = str(chosen.resolve())
+    return out
+
+
+def build_rank_cagemate_window_feature_matrix(
+    resp_paths,
+    rename_map,
+    data_type="rodentAirflow",
+    target_srate=400,
+    window_sec=3.0,
+    n_windows_per_session=100,
+    min_breaths_per_window=2,
+    random_state=42,
+):
+    """
+    Window-level breathmetrics features for cagemate rank recordings.
+
+    Parameters
+    ----------
+    resp_paths : dict
+        trial_id -> path to .h5 (keys can be any label; metadata comes from filenames).
+    rename_map : dict
+        original_basename -> canonical_basename (see rank notebooks).
+
+    Each row includes Subject (recorded mouse), Partner, DyadID, Rank (of recorded mouse),
+    and PartnerRank for grouped CV / dyad-level splits.
+    """
+    all_rows = []
+
+    for trial, h5_path in resp_paths.items():
+        orig_base = os.path.basename(str(h5_path))
+        canonical = canonical_rank_recording_basename(h5_path, rename_map)
+        meta = parse_rank_cagemate_canonical_basename(canonical)
+
+        print(f"\n[Rank CM] trial={trial}")
+        print(f"  file: {orig_base} -> canonical: {canonical}")
+
+        if meta is None:
+            print("  Could not parse canonical basename (expected rename_map target with _SUB/_DOM)")
+            continue
+
+        signal, time, fs, _meta = load_clean_resp_signal(
+            h5_path,
+            target_rate=target_srate,
+        )
+        if signal is None:
+            print("  Load failed")
+            continue
+
+        bm = fit_bm_session(signal, fs, data_type=data_type)
+        if bm is None:
+            continue
+
+        print(f"  {len(bm.inhaleOnsets)} breaths detected in session")
+
+        windows = sample_random_nonoverlapping_windows(
+            time=time,
+            signal=signal,
+            window_dur=window_sec,
+            n_windows=n_windows_per_session,
+            seed=random_state,
+            allow_partial_if_short=False,
+        )
+        if len(windows) == 0:
+            print("  No usable full windows")
+            continue
+
+        window_rows = extract_features_from_windows(
+            bm=bm,
+            windows=windows,
+            min_breaths_per_window=min_breaths_per_window,
+        )
+        print(f"  {len(window_rows)} usable windows")
+
+        for row in window_rows:
+            row.update(
+                {
+                    "Trial": trial,
+                    "Subject": meta["subject_id"],
+                    "Partner": meta["partner_id"],
+                    "DyadID": meta["dyad_id"],
+                    "Recording": canonical,
+                    "MouseSubject": meta["subject_id"],
+                    "Condition": "CM",
+                    "Rank": meta["rank_recorded_mouse"],
+                    "PartnerRank": meta["partner_rank"],
+                    "Type": "CagemateRank",
+                    "session_duration_sec": time[-1] - time[0],
+                    "n_breaths_total": len(bm.inhaleOnsets),
+                    "WindowSec": window_sec,
+                    "session_stamp": meta["session_stamp"],
+                }
+            )
+            all_rows.append(row)
+
+    if not all_rows:
+        print("\nNo rows collected.")
+        return pd.DataFrame()
+
+    master_df = pd.DataFrame(all_rows).reset_index(drop=True)
+    print(f"\nRank cagemate window matrix: {len(master_df)} rows x {len(master_df.columns)} cols")
+    print(f"   Trials / recordings : {master_df['Recording'].nunique()}")
+    print(f"   Recorded subjects    : {master_df['Subject'].nunique()}")
+    print(f"   Dyads                : {master_df['DyadID'].nunique()}")
+    print(f"   Rank:\n{master_df['Rank'].value_counts()}")
+    return master_df
