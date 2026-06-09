@@ -181,7 +181,8 @@ cython_debug/
 *.sqlite
 *.csv
 *.avi
-
+*.h5
+*.hdf5
 
 
 # Large files and directories

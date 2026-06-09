@@ -270,15 +270,24 @@ def get_sniff_respiratory_rate(signal, time, sniff_start, sniff_end, sampling_ra
 
 import pandas as pd
 
-def load_clean_boris(csv_path):
+def load_clean_boris(csv_path, subject_only=True):
     """
     Load a BORIS CSV file and standardize columns for behavior alignment.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to a BORIS export CSV.
+    subject_only : bool, default True
+        If True, keep only bouts initiated by the recorded subject.
+        If False, keep bouts initiated by the subject or social agent.
 
     Returns
     -------
     df : DataFrame
-        Columns: ['Behavior', 'Subject', 'Start', 'Stop', 'Duration']
-        Keeps only 'subject' rows and social behaviors.
+        Columns: ['Behavior', 'Initiator', 'Start', 'Stop', 'Duration']
+        Initiator is the BORIS actor label (e.g. 'subject', 'social_agent').
+        Only the three social sniffing behaviors are retained.
     """
     try:
         df = pd.read_csv(csv_path)
@@ -308,12 +317,18 @@ def load_clean_boris(csv_path):
     df["Behavior"] = df["Behavior"].str.lower().str.strip()
     df["Subject"] = df["Subject"].str.lower().str.strip()
 
-    # --- Keep only subject-initiated behaviors ---
-    df = df[df["Subject"] == "subject"]
+    # --- Filter by initiator ---
+    if subject_only:
+        df = df[df["Subject"] == "subject"]
+    else:
+        df = df[df["Subject"].isin(["subject", "social_agent"])]
 
     # --- Focus on relevant social behaviors ---
     behaviors_keep = ["facial sniffing", "body sniffing", "anogenital sniffing"]
     df = df[df["Behavior"].isin(behaviors_keep)]
+
+    # Rename BORIS actor column (distinct from mouse Subject ID used later)
+    df = df.rename(columns={"Subject": "Initiator"})
 
     # --- Sort chronologically ---
     df = df.sort_values("Start").reset_index(drop=True)
