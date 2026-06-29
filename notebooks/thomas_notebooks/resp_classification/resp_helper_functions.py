@@ -556,8 +556,9 @@ def build_interaction_boris_catalog(
     """
     Build session-aligned Aim1 + BLA cagemate interaction path catalogs.
 
-    Matches each respiration H5 to one or more BORIS CSV exports. Aim1 keeps all
-    parsed exports except names in aim1_exclude_boris_names. BLA keeps every
+    Matches each respiration H5 to one BORIS CSV export. Aim1 duplicate exports
+    for the same session prefer ``_VT`` in the filename (e.g. ``.1_VT.csv`` over
+    ``.1.csv``). Names in aim1_exclude_boris_names are skipped. BLA keeps every
     matched export; sessions split into VT_SA / VT_CM are retained separately.
 
     Returns
@@ -605,7 +606,9 @@ def build_interaction_boris_catalog(
             return None
         if len(files) == 1:
             return files[0]
-        chosen = sorted(files, key=lambda p: p.name)[0]
+        vt_files = [f for f in files if re.search(r"_VT", f.name, re.IGNORECASE)]
+        pool = vt_files if vt_files else files
+        chosen = sorted(pool, key=lambda p: p.name)[0]
         if verbose:
             others = [f.name for f in files if f != chosen]
             print(
