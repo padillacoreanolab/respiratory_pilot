@@ -1,0 +1,223 @@
+[33mcommit 5d53e2bc712f8ecad6628229f67895308a1146c5[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Thu Jun 4 15:18:53 2026 -0400
+
+    plotted cagemate behavior - starting the alignment to resp
+
+[33mcommit 8d9e8a58238f813b2fad78263af376aaebefb0ee[m
+Merge: d6ab947 7fd160d
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Tue May 26 07:31:35 2026 -0400
+
+    Merge branch 'main' of https://github.com/padillacoreanolab/respiratory_pilot
+
+[33mcommit d6ab9475f6ae68f0a5dcb9c622c20a46a0936656[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Tue May 26 07:31:27 2026 -0400
+
+    worked on data analysis for UT and R34
+
+[33mcommit 7fd160d6e5f2d76df9d745f6697a58cbf00cac31[m
+Author: tomHep10 <thomasheeps10@gmail.com>
+Date:   Fri May 22 14:24:21 2026 -0400
+
+    adding enviornemnt for keypoint
+
+[33mcommit 777b795ea9c1046c1d05481d3a1a355a09191d32[m
+Author: tomHep10 <thomasheeps10@gmail.com>
+Date:   Wed May 20 14:27:04 2026 -0400
+
+    restructured thomas_notebooks and added keypoint setup
+
+[33mcommit 66df071f8790f2b83cdc3f21b90259dbbddbe89c[m
+Author: tomHep10 <thomasheeps10@gmail.com>
+Date:   Tue May 19 13:55:48 2026 -0400
+
+    plots made for poster
+
+[33mcommit 5879188809fa31d7c80c9fd9a1a23c9cfd0485b1[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Tue May 12 08:51:54 2026 -0400
+
+    UT analsysis
+
+[33mcommit 58a20e5e0c49b44ffdd8579ad593cc37e357e1e7[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Tue May 12 08:50:03 2026 -0400
+
+    worked
+
+[33mcommit 5281ceab1cf77c55a3be2621ab599fb1fc5c1d69[m
+Author: tomHep10 <thomasheeps10@gmail.com>
+Date:   Fri Apr 17 11:00:12 2026 -0400
+
+    rank and valence models
+
+[33mcommit c32901af744266e29f4c1bd6caaad6e230e6cbcb[m
+Merge: 8697908 f22b557
+Author: tomHep10 <thomasheeps10@gmail.com>
+Date:   Fri Apr 10 09:37:45 2026 -0400
+
+    Merge branch 'main' of https://github.com/padillacoreanolab/respiratory_pilot
+
+[33mcommit 8697908d5db317cd5f4990aeb9e8febb3343fe4f[m
+Author: tomHep10 <thomasheeps10@gmail.com>
+Date:   Fri Apr 10 09:37:39 2026 -0400
+
+    valence-classification
+
+[33mcommit f22b5574b29e3126a1116ac81ef8320b220d6289[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Fri Apr 10 07:46:52 2026 -0400
+
+    added new data to logistic regression did not improve model figured tho
+
+[33mcommit 81be57e12893daaff5df3e3a32c6818180533194[m
+Author: tomHep10 <thomasheeps10@gmail.com>
+Date:   Tue Apr 7 15:38:08 2026 -0400
+
+    classification notebooks
+
+[33mcommit 211186ca8e2987b2fc33a7f95561b06689dd5532[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sun Apr 5 13:17:16 2026 -0400
+
+    worked
+
+[33mcommit d32ced6b7feb20ce19af317a26a923503efe2b2e[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sun Apr 5 13:14:19 2026 -0400
+
+    convert boris hand scoring file to plot ready data wrangle d files
+
+[33mcommit d234794c9ebfde025c96953d85a921a4e0fd1364[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sun Apr 5 13:13:14 2026 -0400
+
+    add rate data to rank binary classifier need to use more features for rank model's
+
+[33mcommit 23ae76d70170ef6967dd5a22a1802b06f4ae9b60[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sun Apr 5 13:11:36 2026 -0400
+
+    anymaze and hand score correlate they are same - boris better but more man power for same results
+
+[33mcommit 433dae564586c9ddbb9de15ff8a68a4d8ee1e632[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Wed Mar 25 16:19:05 2026 -0400
+
+    worked on creating a new script for trodes to h5 also worked on R34/aim1 data  analysis, replotted post SfN log regression updated to include only resp no behavior
+    
+    Thomas to use the new CM .h5 files to add to the SVM model for rank
+
+[33mcommit 5fff97929aca809b94000012f9f690cc39152db9[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sun Feb 15 14:58:05 2026 -0500
+
+    working on respiratory pre-post analysis plotting on-off for both removing mice with flat signals QC
+
+[33mcommit 62350b81710c211aa2a003f9b9934fe904f42705[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sun Feb 15 12:24:21 2026 -0500
+
+    worked on aim1 analysis cleaned up old files moved files and organized repo
+
+[33mcommit 5a316b2f9d2d1669133383eccec2a72493259b6c[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sun Feb 15 10:50:18 2026 -0500
+
+    Create 1_1_RI1_f2_e_off_20260110_154830.1_resp_demo.mp4
+
+[33mcommit ce5c6712b2b48e8e7bfa33a4185569ded95db56b[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sun Jan 25 21:20:18 2026 -0500
+
+    updates decoders from session level to bout level also converted recs for bla opto chr and inspected recs and signals
+
+[33mcommit 28c87cba3ffc1ddc9ef37b73b7bc6c9683d4160a[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sun Jan 25 21:18:58 2026 -0500
+
+    updated logistic decoders to be bout level to replace the session level decoders from SfN also worked converting recs to h5 and plotting inspections of signals from BLA opto ChR
+
+[33mcommit 13ae73e9e4fcb603072a89647e243bcf804e862d[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sun Jan 18 11:52:05 2026 -0500
+
+    organizing data for analysis
+
+[33mcommit 8956ba4388afa6d65e7c3afe6a45953464347d28[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Thu Jan 15 16:52:21 2026 -0500
+
+    add script for ECU > h5 worked on aim 1 analysis
+
+[33mcommit 723b9e452338592684d994e2079a38e9ed3ce4d2[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Tue Dec 30 15:10:50 2025 -0500
+
+    Update post_SfN_log.ipynb
+
+[33mcommit 0609c44effbc608136f58626593963c591241239[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Mon Dec 22 18:56:15 2025 -0500
+
+    R34 notebooks
+    
+    looking over logistic models re-running bout level
+
+[33mcommit e1ac11ba4cfc3bbf3bef4e5f1d157a21394d1bb7[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Thu Oct 23 08:08:25 2025 -0400
+
+    update logistic notebook
+
+[33mcommit 954ef901f704ad6f29cd2be80af6b2f4cd06228a[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Wed Oct 22 19:00:44 2025 -0400
+
+    Update r34logistic.ipynb
+
+[33mcommit 9613be24b03cf3fbe21fcaeedc9c2c0a51609300[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Wed Oct 22 18:57:52 2025 -0400
+
+    R34 logistic regression notebook created
+
+[33mcommit 425cb3d533c7dd7751bf7a515f6d6d1ed4ca2066[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sat Oct 11 12:46:34 2025 -0400
+
+    tested h5 code works! added BL resp h5 to CM analysis so we can look at what the habituation looks like prior to CM interaction
+
+[33mcommit 1f24781b3b442f6dda9eb9f8998fc16df0cc1f68[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Sun Sep 21 14:24:10 2025 -0400
+
+    worked on R34 cagemate analysis, worked on SP from R34 valence made fig for paper,
+
+[33mcommit 36281eddbefb0e50c31f7f12d3f47eb37a708d3d[m
+Author: sjs085 <157378873+sjs085@users.noreply.github.com>
+Date:   Wed Sep 10 06:57:37 2025 -0400
+
+    pipeline creation, data analysis
+    
+    Moved old notebooks into my folder, deleted old notebooks, added resp pipeline notebooks, and added R34 analysis on iteration 4. I have a lot of notebooks still needing to be put into my own folder
+
+[33mcommit 21094a3889640bfae1d53fc6e3238454d81c360f[m
+Author: tomHep10 <thomasheeps10@gmail.com>
+Date:   Wed Aug 27 16:36:54 2025 -0400
+
+    updating the readme to reflect updates to env
+
+[33mcommit a46db66f28f41c92659ba80ee0f400bc8af95d53[m
+Merge: fe483a5 369f09d
+Author: tomHep10 <thomasheeps10@gmail.com>
+Date:   Tue Aug 26 11:55:42 2025 -0400
+
+    Merge branch 'main' of https://github.com/padillacoreanolab/respiratory_pilot
+    We are merging so my new commit can be pushed
+
+[33mcommit fe483a52222c200c0407bd7b7cf519dbc82be470[m
+Author: tomHep10 <thomasheeps10@gmail.com>
+Date:  
