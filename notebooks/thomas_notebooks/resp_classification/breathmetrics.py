@@ -201,7 +201,14 @@ class bmObject:
             elif self.dataType == 'rodentAirflow' or self.dataType == 'rodentThermocouple':
                 srateAdjust = self.srate/1000;
                 swSizes = [int(np.floor(5*srateAdjust)), int(np.floor(10 * srateAdjust)), int(np.floor(20 * srateAdjust)), int(np.floor(50 * srateAdjust))];
-        
+
+        # The window sizes are fixed in ms and floored to whole samples; at low sampling rates
+        # some become 0 samples and the search below used to crash with an unrelated error.
+        if min(swSizes) < 1:
+            raise ValueError(
+                f"Legacy BreathMetrics extrema windows {swSizes} (samples) contain a zero-length window at "
+                f"srate={self.srate} Hz. Use srate >= 200 Hz for rodent data, or detector='adaptive_prominence'.")
+
 
         # pad end with zeros to include tail of data otherwise missed by big windows 
         padInd = min([len(resp)-1,max(swSizes)*2])
@@ -243,20 +250,22 @@ class bmObject:
                 windowIter=windowInit
 
                 for i in range(nIters):
-                    thisWindow = paddedResp[windowIter:windowIter + sw - 1]
+                    # MATLAB's resp(w:w+sw-1) is inclusive (sw samples); the Python slice end is exclusive
+                    thisWindow = paddedResp[windowIter:windowIter + sw]
                     maxVal = np.max(thisWindow)
                     maxInd = np.argmax(thisWindow)
 
                     # make sure peaks and troughs are real.
                     if maxVal > peakThreshold:
                         # index in window + location of window in original resp time
-                        argmaxVect[0,i]= windowIter + maxInd-1
+                        # (no MATLAB -1: np.argmax is already 0-based)
+                        argmaxVect[0,i]= windowIter + maxInd
 
                     minVal = np.min(thisWindow)
                     minInd = np.argmin(thisWindow)
                     if minVal < troughThreshold:
                         # index in window + location of window in original resp time
-                        argminVect[0,i]= windowIter+minInd-1
+                        argminVect[0,i]= windowIter + minInd
 
                     windowIter = windowIter + sw
 
@@ -295,22 +304,17 @@ class bmObject:
         
         # sometimes there are multiple peaks or troughs in series which shouldn't be possible. This loop ensures the series alternates peaks and troughs.
 
-        # first we must find the first peak
-        offByN = True;
-        tri = 1;
-        while offByN:
-            if peakInds[tri] > troughInds[tri]:
-                # remove this trough
-                troughInds = troughInds[tri + 1:len(troughInds)]
-            else:
-                offByN=False;
+        # first we must find the first peak: drop troughs that come before it
+        # (0-based; the MATLAB original starts at index 1)
+        while len(troughInds) > 0 and peakInds[0] > troughInds[0]:
+            troughInds = troughInds[1:]
 
         correctedPeaks = []
         correctedTroughs = []
 
 
-        pki=1 # peak ind
-        tri=1 # trough ind
+        pki=0 # peak ind
+        tri=0 # trough ind
 
         # variable to decide whether to record peak and trough inds.
         proceedCheck = 1
@@ -327,7 +331,8 @@ class bmObject:
             if peakPeakDiff < peakTroughDiff:
                 # if two peaks in a row, take larger peak
                 nxtPk = np.argmax([paddedResp[peakInds[pki]], paddedResp[peakInds[pki+1]]])
-                if nxtPk == 2:
+                # np.argmax returns 0 or 1 (MATLAB max returns 1 or 2); 1 = next peak is larger
+                if nxtPk == 1:
                     # forget this peak. keep next one.
                     pki = pki+1
                 else:
@@ -349,7 +354,8 @@ class bmObject:
                 if troughTroughDiff < troughPeakDiff:
                     # if two troughs in a row, take larger trough
                     nxtTr = np.argmin([paddedResp[troughInds[tri]], paddedResp[troughInds[tri + 1]]])
-                    if nxtTr == 2:
+                    # np.argmin returns 0 or 1; 1 = next trough is deeper
+                    if nxtTr == 1:
                         # take second trough
                         tri = tri + 1
                     else:
@@ -376,7 +382,7 @@ class bmObject:
         #             disp('Peaks got ahead of troughs. This shouldnt happen.');
         #             disp(strcat('Peak ind: ', num2str(peakInds(pki))));
         #             disp(strcat('Trough ind: ', num2str(troughInds(tri))));
-                    raise('unexpected error. stopping');
+                    raise RuntimeError('Peaks got ahead of troughs. This should not happen.')
 
             proceedCheck=1;
 
@@ -914,12 +920,17 @@ class bmObject:
     # bookkeeping methods
     def running_mean(self, x, N):
         # calculates sliding window mean
-        startInd=int(np.floor(N/2))
-        cumsum = np.cumsum(np.insert(x, 0, 0)) 
-        unPadded=(cumsum[N:] - cumsum[:-N]) / N
-        smoothedData=np.zeros([1,len(x)])
-        smoothedData[0,startInd:startInd+len(unPadded)]=unPadded
-        smoothedData=smoothedData[0]
+        # Sample p averages x[p-floor(N/2) : p-floor(N/2)+N]. Interior values are unchanged from the
+        # original; near the edges the window is clipped to the available samples instead of the
+        # result being left at 0 (which left the first/last 30 s un-baselined for the 60 s window).
+        x = np.asarray(x, dtype=float)
+        N = max(int(N), 1)
+        startInd = int(np.floor(N/2))
+        cumsum = np.cumsum(np.insert(x, 0, 0))
+        p = np.arange(len(x))
+        lo = np.clip(p - startInd, 0, len(x))
+        hi = np.clip(p - startInd + N, 0, len(x))
+        smoothedData = (cumsum[hi] - cumsum[lo]) / (hi - lo)
 
         return smoothedData
     
@@ -935,17 +946,29 @@ class bmObject:
 
         return validVals
 
-    def estimateAllFeatures(self, zScore=0, baselineCorrectionMethod='sliding', simplify=1, verbose=0 ):
+    def estimateAllFeatures(self, zScore=0, baselineCorrectionMethod='sliding', simplify=1, verbose=0,
+                            detector='legacy', detector_config=None, time_s=None):
         '''Calls all of the above functions in the correct order to estimate all features in the respiratory signal.
-        
+
         Parameters
         ----------
         zScore : 0 or 1, respiratory signal is zscored if set to 1
         baselineCorrectionMethod : 'simple' subtracts the average of the signal to baseline
                                    'sliding' uses subtracts the average of minute long windows to baseline
         simplify : 0 or 1, nInhales is set to nExhales by removing the last exhale if set to 1
-        
+        detector : 'legacy' (default; BreathMetrics extrema + onsets, unchanged) or
+                   'adaptive_prominence' (adaptive_breath_detection.py; rodentAirflow only)
+        detector_config : AdaptiveDetectorConfig for the adaptive detector (None = defaults)
+        time_s : optional recording-time vector (same length as resp); adaptive detector uses it
+                 to split at recording gaps. Never modified.
+
         '''
+        self.detector = detector
+        if detector == 'adaptive_prominence':
+            self._estimateAllFeaturesAdaptive(detector_config, time_s)
+            return
+        if detector != 'legacy':
+            raise ValueError(f"unknown detector {detector!r}; use 'legacy' or 'adaptive_prominence'")
         if self.dataType == 'humanAirflow' or self.dataType == 'rodentAirflow':
             self.smoothResp()
             self.correctRespirationToBaseline(method=baselineCorrectionMethod,zScore=zScore)
@@ -959,5 +982,84 @@ class bmObject:
             self.correctRespirationToBaseline(method=baselineCorrectionMethod, zScore=zScore)
             self.labelExtrema(simplify=simplify)
             self.estimateSecondaryFeatures(verbose)
+
+    def _estimateAllFeaturesAdaptive(self, detector_config=None, time_s=None):
+        '''Adaptive local-prominence detector (adaptive_breath_detection.py).
+
+        Fills the same attributes the legacy path fills, with the same shapes, so
+        resp_helper_functions.extract_bout_features works unchanged. Differences:
+          * index arrays are float and may contain NaN (e.g. no inhale onset for a
+            first breath in a segment, no trough after the last one);
+          * baselineCorrectedRespiration is the LOCAL (cycle-mean) baseline-corrected,
+            polarity-applied signal, NaN in invalid intervals;
+          * extra attributes: breathSegmentIds, breathCompleteCycle, breathLowAmplitude,
+            breathTable, adaptiveResult, invalidMask.
+        '''
+        try:
+            from adaptive_breath_detection import detect_breaths
+        except ImportError:  # breathmetrics.py imported without its folder on sys.path
+            import importlib.util
+            import os
+            spec = importlib.util.spec_from_file_location(
+                'adaptive_breath_detection',
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'adaptive_breath_detection.py'))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            detect_breaths = mod.detect_breaths
+
+        if self.dataType != 'rodentAirflow':
+            raise ValueError("detector='adaptive_prominence' is implemented for rodentAirflow only")
+        res = detect_breaths(self.resp, self.srate, time_s=time_s, config=detector_config)
+        b = res.breaths
+        n = len(b)
+        if n == 0:
+            raise ValueError('adaptive_prominence: no breaths detected')
+
+        def col(name):
+            return b[name].to_numpy(dtype=float)
+
+        def row(name):
+            return col(name).reshape(1, n)
+
+        self.adaptiveResult = res
+        self.breathTable = b
+        self.invalidMask = ~res.valid
+        self.time = np.arange(len(self.resp)) / self.srate
+        self.smoothedRespiration = res.smoothed
+        self.baselineCorrectedRespiration = res.corrected
+        self.inhalePeaks = col('peak')
+        self.exhaleTroughs = col('trough')
+        self.peakInspiratoryFlows = col('peak_value')
+        self.troughExpiratoryFlows = col('trough_value')
+        self.inhaleOnsets = col('inhale_onset')
+        self.exhaleOnsets = col('exhale_onset')
+        self.inhalePauseOnsets = row('inhale_pause_onset')
+        self.exhalePauseOnsets = row('exhale_pause_onset')
+        self.inhaleOffsets = row('inhale_offset')
+        self.exhaleOffsets = row('exhale_offset')
+        self.inhaleDurations = row('inhale_duration_s')
+        self.exhaleDurations = row('exhale_duration_s')
+        self.inhalePauseDurations = row('inhale_pause_duration_s')
+        self.exhalePauseDurations = row('exhale_pause_duration_s')
+        self.inhaleVolumes = row('inhale_volume_proxy')
+        self.exhaleVolumes = row('exhale_volume_proxy')
+        self.breathSegmentIds = b['segment'].to_numpy()
+        self.breathCompleteCycle = b['complete_cycle'].to_numpy()
+        self.breathLowAmplitude = b['low_amplitude'].to_numpy()
+
+        ibi = col('ibi_s')
+        ibi = ibi[np.isfinite(ibi)]
+        rate = 1.0 / np.mean(ibi) if len(ibi) else np.nan
+        self.secondaryFeatures = {
+            'Breathing Rate': rate,
+            'Average Inter-Breath Interval': np.mean(ibi) if len(ibi) else np.nan,
+            'Coefficient of Variation of Breathing Rate': np.std(ibi) / np.mean(ibi) if len(ibi) else np.nan,
+            'Average Inhale Duration': np.nanmean(col('inhale_duration_s')),
+            'Average Exhale Duration': np.nanmean(col('exhale_duration_s')),
+            'Percent of Breaths With Inhale Pause': np.mean(np.isfinite(col('inhale_pause_onset'))),
+            'Percent of Breaths With Exhale Pause': np.mean(np.isfinite(col('exhale_pause_onset'))),
+            'Fraction of Samples Invalid': float(np.mean(~res.valid)),
+        }
+        self.featureEstimationsComplete = 1
         
     

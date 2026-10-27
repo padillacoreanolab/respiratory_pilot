@@ -1,0 +1,29 @@
+{
+ "VALIDITY_PARAMS": {
+  "block_s": 1.0,
+  "block_hop_s": 0.25,
+  "flat_rel_range": 0.03,
+  "flat_acf_max": 0.5,
+  "low_amp_rel_range": 0.15,
+  "artifact_rel_range": 8.0,
+  "artifact_pad_s": 0.25,
+  "min_segment_s": 1.0
+ },
+ "PEAK_PARAMS": {
+  "prominence_frac": 0.2,
+  "noise_mult": 2.0,
+  "local_range_win_s": 1.0,
+  "local_range_pcts": [
+   10,
+   90
+  ],
+  "prominence_wlen_s": 1.0,
+  "min_peak_width_s": 0.015,
+  "min_peak_distance_s": 0.06
+ },
+ "DETECTOR_PARAMS": {
+  "smooth_ms": 10.0,
+  "scale_highpass_hz": 1.0,
+  "polarity": 1
+ }
+}

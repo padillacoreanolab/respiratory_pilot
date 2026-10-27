@@ -817,11 +817,19 @@ def build_upstream_exclusion_set(
     drop_aim1_subjects=None,
     min_sniffs_per_trial=10,
     extra_exclude_by_cohort=None,
+    initiator="subject",
 ):
     """
     Build cohort-aware subject/trial exclusion sets before BreathMetrics extraction.
 
     Subject exclusions are keyed by cohort (e.g. Aim1 1_1 is independent of BLA 1_1).
+
+    initiator : str or None
+        Which BORIS actor to count for the low-sniff / imbalance gates.
+        "subject" = subject-initiated bouts only (legacy); None = BOTH actors
+        (subject + social_agent), matching build_feature_matrix's subject_only=False
+        extraction. Rank uses None (both actors) so the gate is consistent with the
+        both-actor feature windows.
 
     Returns
     -------
@@ -831,7 +839,7 @@ def build_upstream_exclusion_set(
     """
     drop_aim1 = {normalize_subject_id(s) for s in (drop_aim1_subjects or [])}
     imbalanced_pairs = boris_imbalanced_subjects(
-        behavior_df, imbalance_ratio=imbalance_ratio,
+        behavior_df, imbalance_ratio=imbalance_ratio, initiator=initiator,
     )
 
     exclude_subjects_by_cohort = {}
@@ -851,7 +859,7 @@ def build_upstream_exclusion_set(
         )
 
     low_sniff_trials = set(boris_low_sniff_trials(
-        behavior_df, min_sniffs=min_sniffs_per_trial,
+        behavior_df, min_sniffs=min_sniffs_per_trial, initiator=initiator,
     ))
 
     return exclude_subjects_by_cohort, low_sniff_trials, {
@@ -1522,6 +1530,12 @@ def extract_bout_features(
     # Naming reason:
     #   IBI = inter-breath interval, a standard timing measure.
     ibis_sec = np.diff(bout_inhale_onsets) / bm.srate
+    if hasattr(bm, "breathSegmentIds"):
+        # adaptive detector: only intervals between consecutive breaths in the same valid
+        # segment (never across a gap/invalid interval); legacy fits never take this branch
+        seg = np.asarray(bm.breathSegmentIds)[bout_inds]
+        consecutive = (np.diff(bout_inds) == 1) & (np.diff(seg) == 0)
+        ibis_sec = ibis_sec[consecutive & np.isfinite(ibis_sec)]
 
     # If somehow we have no interval after filtering, stop here
     if len(ibis_sec) == 0:
@@ -1779,7 +1793,14 @@ def extract_bout_features(
 # Session-level fitter
 # =============================================================================
 
-def fit_bm_session(signal, srate, data_type="rodentAirflow"):
+# Detector used by fit_bm_session when its `detector` argument is None. Keep "legacy" to
+# reproduce existing feature files; set it to "adaptive_prominence" in a notebook to switch
+# every fit_bm_session call in that notebook (see detector_validation/README.md).
+DEFAULT_DETECTOR = "legacy"
+
+
+def fit_bm_session(signal, srate, data_type="rodentAirflow", detector=None, detector_config=None,
+                   time_s=None):
     """
     Fits a bmObject on a full session signal.
 
@@ -1788,14 +1809,21 @@ def fit_bm_session(signal, srate, data_type="rodentAirflow"):
     signal    : 1-D np.ndarray, baseline-corrected respiration (already cleaned)
     srate     : float, sampling rate in Hz
     data_type : str, passed to bmObject (default 'rodentAirflow')
+    detector  : 'legacy' | 'adaptive_prominence' | None (None -> DEFAULT_DETECTOR)
+    detector_config : adaptive_breath_detection.AdaptiveDetectorConfig (adaptive only)
+    time_s    : optional recording-time vector (adaptive only; used to split at gaps)
 
     Returns
     -------
     bm : fitted bmObject, or None on failure
     """
+    detector = DEFAULT_DETECTOR if detector is None else detector
     try:
         bm = bmObject(signal, srate, data_type)
-        bm.estimateAllFeatures()
+        if detector == "legacy":
+            bm.estimateAllFeatures()            # identical call to the original pipeline
+        else:
+            bm.estimateAllFeatures(detector=detector, detector_config=detector_config, time_s=time_s)
         return bm
     except Exception as e:
         print(f"  ⚠️  bmObject fitting failed: {e}")
@@ -1803,163 +1831,7 @@ def fit_bm_session(signal, srate, data_type="rodentAirflow"):
 
 
 # =============================================================================
-# Main pipeline
-# =============================================================================
-
-def build_resp_feature_matrix(
-    resp_paths,
-    boris_paths,
-    rank_map,
-    duration_threshold=0.5,
-    pre_bout_window=2.0,
-    data_type="rodentAirflow",
-    target_srate=100,
-    min_breaths_per_bout=2,
-):
-    """
-    Builds a per-bout respiratory feature matrix for valence classification.
-
-    Parameters
-    ----------
-    resp_paths          : dict  {trial_id: h5_path}
-    boris_paths         : dict  {trial_id: boris_csv_path}
-    rank_map            : dict  {subject_id: rank}
-    duration_threshold  : float, minimum bout duration in seconds to keep
-    pre_bout_window     : float, seconds before bout used for pre-bout rate
-    data_type           : str, bmObject data type (default 'rodentAirflow')
-    target_srate        : float, expected sampling rate of loaded signals
-    min_breaths_per_bout: int,   bouts with fewer breaths are dropped
-
-    Returns
-    -------
-    master_df : pd.DataFrame, one row per bout with all respiratory features
-    """
-
-    all_rows = []
-
-    for trial, h5_path in resp_paths.items():
-        print(f"\nProcessing {trial}...")
-
-        # ── 1. Load signal ────────────────────────────────────────────────
-        signal, time, fs, meta = load_clean_resp_signal(h5_path, target_rate=target_srate)
-        if signal is None:
-            print(f"  ❌ Load failed, skipping.")
-            continue
-
-        # ── 2. Fit bmObject once for the full session ─────────────────────
-        print(f"  Fitting bmObject on full session ({len(signal)/fs:.1f}s @ {fs}Hz)...")
-        bm = fit_bm_session(signal, fs, data_type=data_type)
-        if bm is None:
-            continue
-        print(f"  ✓ Found {len(bm.inhaleOnsets)} breaths in session")
-
-        # ── 3. Metadata ───────────────────────────────────────────────────
-        subj      = "_".join(trial.split("_")[1:3])
-        condition = trial.split("_")[0]
-        rank      = rank_map.get(subj, np.nan)
-
-        # ── 4. Load BORIS ─────────────────────────────────────────────────
-        if trial in boris_paths:
-            boris_df = load_clean_boris(boris_paths[trial])
-        else:
-            boris_df = pd.DataFrame()
-
-        # ── 5. Baseline-only session ──────────────────────────────────────
-        if boris_df.empty:
-            print(f"  ⚠️  No BORIS data — saving baseline pseudo-bout")
-            feats = extract_bout_features(bm, time[0], time[-1])
-            if feats is not None:
-                row = {
-                    "BoutID"    : 0,
-                    "Behavior"  : "Baseline",
-                    "Start"     : time[0],
-                    "Stop"      : time[-1],
-                    "Duration"  : time[-1] - time[0],
-                    "Label"     : np.nan,      # valence label placeholder
-                    "Trial"     : trial,
-                    "Subject"   : subj,
-                    "Condition" : condition,
-                    "Rank"      : rank,
-                    "Type"      : "Baseline",
-                }
-                row.update(feats)
-                all_rows.append(row)
-            continue
-
-        # ── 6. Filter short bouts ─────────────────────────────────────────
-        n_pre = len(boris_df)
-        boris_df = boris_df[boris_df["Duration"] >= duration_threshold].copy()
-        if len(boris_df) < n_pre:
-            print(f"  → Filtered {n_pre - len(boris_df)} short bouts (<{duration_threshold}s)")
-
-        # ── 7. Per-bout feature extraction ────────────────────────────────
-        n_dropped = 0
-        for bout_id, bout in boris_df.iterrows():
-
-            feats = extract_bout_features(bm, bout["Start"], bout["Stop"])
-
-            if feats is None or feats["n_breaths"] < min_breaths_per_bout:
-                n_dropped += 1
-                continue
-
-            # --- Pre-bout rate (simple IBI-based, same logic as before) ---
-            pre_start = max(time[0], bout["Start"] - pre_bout_window)
-            pre_feats = extract_bout_features(bm, pre_start, bout["Start"])
-            pre_rate  = pre_feats["breathing_rate_hz"] if pre_feats is not None else np.nan
-
-            row = {
-                "BoutID"          : bout_id,
-                "Behavior"        : bout.get("Behavior", np.nan),
-                "Start"           : bout["Start"],
-                "Stop"            : bout["Stop"],
-                "Duration"        : bout["Duration"],
-                "Label"           : bout.get("Label", np.nan),   # valence label if already coded
-                "PreBoutRespRate" : pre_rate,
-                "Trial"           : trial,
-                "Subject"         : subj,
-                "Condition"       : condition,
-                "Rank"            : rank,
-                "Type"            : "Interaction",
-            }
-            row.update(feats)
-
-            # Derived: delta from pre-bout rate
-            row["resp_rate_delta"] = (
-                row["breathing_rate_hz"] - pre_rate
-                if not np.isnan(pre_rate) else np.nan
-            )
-
-            all_rows.append(row)
-
-        if n_dropped:
-            print(f"  → Dropped {n_dropped} bouts with <{min_breaths_per_bout} breaths")
-
-        print(f"  ✓ {len(boris_df) - n_dropped} bouts extracted for {trial}")
-
-    # ── 8. Assemble master DataFrame ──────────────────────────────────────
-    if not all_rows:
-        print("\n⚠️  No valid bouts processed.")
-        return pd.DataFrame()
-
-    master_df = pd.DataFrame(all_rows).reset_index(drop=True)
-
-    # Session-normalised z-score of breathing rate (useful classifier feature)
-    master_df["breathing_rate_z"] = (
-        master_df
-        .groupby("Trial")["breathing_rate_hz"]
-        .transform(lambda x: (x - x.mean()) / x.std() if x.std() > 0 else np.nan)
-    )
-
-    print(f"\n✅ Feature matrix: {len(master_df)} bouts × {len(master_df.columns)} columns")
-    print(f"   Trials: {master_df['Trial'].nunique()}, "
-          f"Subjects: {master_df['Subject'].nunique()}")
-    print(f"   Types : {master_df['Type'].value_counts().to_dict()}")
-
-    return master_df
-
-
-# =============================================================================
-# Convenience: return only the feature columns for ML (drop metadata)
+# Metadata (non-feature) columns in the feature matrices
 # =============================================================================
 
 METADATA_COLS = [
@@ -1967,35 +1839,6 @@ METADATA_COLS = [
     "PreBoutRespRate", "Trial", "Subject", "Condition", "Rank",
     "Type", "resp_rate_delta", "breathing_rate_z",
 ]
-
-def get_feature_matrix(master_df, drop_incomplete=True):
-    """
-    Returns (X, y, groups) ready for sklearn.
-
-    Parameters
-    ----------
-    master_df       : output of build_resp_feature_matrix()
-    drop_incomplete : if True, drop rows with any NaN in feature columns
-
-    Returns
-    -------
-    X      : pd.DataFrame of respiratory feature columns only
-    y      : pd.Series of valence labels (from "Label" column)
-    groups : pd.Series of subject IDs (for GroupKFold cross-validation)
-    """
-    feature_cols = [c for c in master_df.columns if c not in METADATA_COLS]
-    X = master_df[feature_cols].copy()
-    y = master_df["Label"].copy()
-    groups = master_df["Subject"].copy()
-
-    if drop_incomplete:
-        valid = X.notna().all(axis=1)
-        n_dropped = (~valid).sum()
-        if n_dropped:
-            print(f"Dropping {n_dropped} rows with NaN features")
-        X, y, groups = X[valid], y[valid], groups[valid]
-
-    return X, y, groups
 
 
 # =============================================================================
@@ -2143,6 +1986,30 @@ def sample_random_nonoverlapping_windows(
     return windows
 
 
+def window_qc(bm, start_sec, stop_sec):
+    """
+    Quality-control summary for one window of an adaptive_prominence fit (NaN for legacy).
+
+    Deliberately NOT merged into extract_bout_features: the classification notebooks use
+    every numeric column as a feature, so QC columns must be joined/filtered explicitly.
+
+    Returns dict: qc_invalid_frac (fraction of samples in invalid intervals),
+    qc_n_segments (valid segments overlapping the window), qc_n_low_amp_breaths,
+    qc_n_incomplete_cycles.
+    """
+    if not hasattr(bm, "breathSegmentIds"):
+        return dict(qc_invalid_frac=np.nan, qc_n_segments=np.nan,
+                    qc_n_low_amp_breaths=np.nan, qc_n_incomplete_cycles=np.nan)
+    s = max(int(round(start_sec * bm.srate)), 0)
+    e = min(int(round(stop_sec * bm.srate)), len(bm.invalidMask))
+    inds = get_bout_breath_indices(bm, start_sec, stop_sec)
+    segs = [k for k, (a, b) in enumerate(bm.adaptiveResult.segments) if a < e and b > s]
+    return dict(qc_invalid_frac=float(np.mean(bm.invalidMask[s:e])) if e > s else np.nan,
+                qc_n_segments=len(segs),
+                qc_n_low_amp_breaths=int(np.sum(bm.breathLowAmplitude[inds])),
+                qc_n_incomplete_cycles=int(np.sum(~bm.breathCompleteCycle[inds])))
+
+
 def extract_features_from_windows(
     bm,
     windows,
@@ -2184,211 +2051,3 @@ def extract_features_from_windows(
         rows.append(row)
 
     return rows
-
-
-# --- Rank / cagemate (paired mice) extraction ---------------------------------
-
-_RANK_PRE_RE = re.compile(r"^(\d+_\d+)_2_([dis])$")
-_RANK_POST_RE = re.compile(r"^(.+)_([dis])_(\d{8}_\d{6})$")
-
-
-def canonical_rank_recording_basename(path_or_name, rename_map):
-    """
-    Map an on-disk .h5 basename to the canonical (renamed) basename from rename_map.
-
-    Original cohort filenames are keys; values embed standardized mouse IDs and _SUB/_DOM.
-    If the file is already canonical or unlisted, returns basename unchanged.
-    """
-    base = os.path.basename(str(path_or_name))
-    lookup = base.replace(".rec.h5", ".h5")
-    if lookup in rename_map:
-        return rename_map[lookup]
-    if base in rename_map:
-        return rename_map[base]
-    return base
-
-
-def parse_rank_cagemate_canonical_basename(canonical_basename):
-    """
-    Parse metadata from a canonical rank .h5 name (rename_map value).
-
-    The first mouse token (before ``_2_<role>_cm_``) is the recorded-airflow subject.
-    Rank for that mouse is encoded as ``_SUB`` / ``_DOM`` before ``.h5``.
-    Returns None if the name does not match the expected pattern.
-    """
-    base = os.path.basename(str(canonical_basename))
-    stem = base.rsplit(".", 1)[0]
-    rank = None
-    if stem.endswith("_SUB"):
-        rank = "Subordinate"
-        stem = stem[: -len("_SUB")]
-    elif stem.endswith("_DOM"):
-        rank = "Dominant"
-        stem = stem[: -len("_DOM")]
-    else:
-        return None
-
-    if "_cm_" not in stem:
-        return None
-    pre, post = stem.split("_cm_", 1)
-    m_pre, m_post = _RANK_PRE_RE.match(pre), _RANK_POST_RE.match(post)
-    if not m_pre or not m_post:
-        return None
-
-    subject_id = m_pre.group(1)
-    partner_id = m_post.group(1)
-    session_stamp = m_post.group(3)
-    partner_rank = "Dominant" if rank == "Subordinate" else "Subordinate"
-    dyad_tokens = sorted([subject_id, partner_id])
-    dyad_id = f"{dyad_tokens[0]}__{dyad_tokens[1]}"
-
-    return {
-        "subject_id": subject_id,
-        "partner_id": partner_id,
-        "dyad_id": dyad_id,
-        "rank_recorded_mouse": rank,
-        "partner_rank": partner_rank,
-        "session_stamp": session_stamp,
-        "subject_side_role": m_pre.group(2),
-        "partner_side_role": m_post.group(2),
-    }
-
-
-def build_rank_cagemate_resp_paths_from_dir(h5_dir, rename_map):
-    """
-    Build trial_id -> absolute path for cagemate rank .h5 files under ``h5_dir``.
-
-    Trial keys are the canonical recording stem (``rename_map`` value without ``.h5``),
-    so they align with ``Recording`` in :func:`build_rank_cagemate_window_feature_matrix`.
-
-    Only files whose canonical basename parses with
-    :func:`parse_rank_cagemate_canonical_basename` are included (unknown files are skipped).
-    If both ``name.h5`` and ``name.rec.h5`` map to the same canonical recording, the
-    non-``.rec`` file is preferred.
-    """
-    from collections import defaultdict
-
-    h5_dir = Path(h5_dir)
-    candidates = defaultdict(list)
-    for p in sorted(h5_dir.iterdir()):
-        if not p.is_file():
-            continue
-        low = p.name.lower()
-        if not low.endswith(".h5"):
-            continue
-        canonical_name = canonical_rank_recording_basename(p, rename_map)
-        if parse_rank_cagemate_canonical_basename(canonical_name) is None:
-            continue
-        trial_key = Path(canonical_name).stem
-        candidates[trial_key].append(p)
-
-    out = {}
-    for trial_key, plist in candidates.items():
-        plain = [x for x in plist if not x.name.lower().endswith(".rec.h5")]
-        chosen = plain[0] if plain else plist[0]
-        out[trial_key] = str(chosen.resolve())
-    return out
-
-
-def build_rank_cagemate_window_feature_matrix(
-    resp_paths,
-    rename_map,
-    data_type="rodentAirflow",
-    target_srate=400,
-    window_sec=3.0,
-    n_windows_per_session=100,
-    min_breaths_per_window=2,
-    random_state=42,
-):
-    """
-    Window-level breathmetrics features for cagemate rank recordings.
-
-    Parameters
-    ----------
-    resp_paths : dict
-        trial_id -> path to .h5 (keys can be any label; metadata comes from filenames).
-    rename_map : dict
-        original_basename -> canonical_basename (see rank notebooks).
-
-    Each row includes Subject (recorded mouse), Partner, DyadID, Rank (of recorded mouse),
-    and PartnerRank for grouped CV / dyad-level splits.
-    """
-    all_rows = []
-
-    for trial, h5_path in resp_paths.items():
-        orig_base = os.path.basename(str(h5_path))
-        canonical = canonical_rank_recording_basename(h5_path, rename_map)
-        meta = parse_rank_cagemate_canonical_basename(canonical)
-
-        print(f"\n[Rank CM] trial={trial}")
-        print(f"  file: {orig_base} -> canonical: {canonical}")
-
-        if meta is None:
-            print("  Could not parse canonical basename (expected rename_map target with _SUB/_DOM)")
-            continue
-
-        signal, time, fs, _meta = load_clean_resp_signal(
-            h5_path,
-            target_rate=target_srate,
-        )
-        if signal is None:
-            print("  Load failed")
-            continue
-
-        bm = fit_bm_session(signal, fs, data_type=data_type)
-        if bm is None:
-            continue
-
-        print(f"  {len(bm.inhaleOnsets)} breaths detected in session")
-
-        windows = sample_random_nonoverlapping_windows(
-            time=time,
-            signal=signal,
-            window_dur=window_sec,
-            n_windows=n_windows_per_session,
-            seed=random_state,
-            allow_partial_if_short=False,
-        )
-        if len(windows) == 0:
-            print("  No usable full windows")
-            continue
-
-        window_rows = extract_features_from_windows(
-            bm=bm,
-            windows=windows,
-            min_breaths_per_window=min_breaths_per_window,
-        )
-        print(f"  {len(window_rows)} usable windows")
-
-        for row in window_rows:
-            row.update(
-                {
-                    "Trial": trial,
-                    "Subject": meta["subject_id"],
-                    "Partner": meta["partner_id"],
-                    "DyadID": meta["dyad_id"],
-                    "Recording": canonical,
-                    "MouseSubject": meta["subject_id"],
-                    "Condition": "CM",
-                    "Rank": meta["rank_recorded_mouse"],
-                    "PartnerRank": meta["partner_rank"],
-                    "Type": "CagemateRank",
-                    "session_duration_sec": time[-1] - time[0],
-                    "n_breaths_total": len(bm.inhaleOnsets),
-                    "WindowSec": window_sec,
-                    "session_stamp": meta["session_stamp"],
-                }
-            )
-            all_rows.append(row)
-
-    if not all_rows:
-        print("\nNo rows collected.")
-        return pd.DataFrame()
-
-    master_df = pd.DataFrame(all_rows).reset_index(drop=True)
-    print(f"\nRank cagemate window matrix: {len(master_df)} rows x {len(master_df.columns)} cols")
-    print(f"   Trials / recordings : {master_df['Recording'].nunique()}")
-    print(f"   Recorded subjects    : {master_df['Subject'].nunique()}")
-    print(f"   Dyads                : {master_df['DyadID'].nunique()}")
-    print(f"   Rank:\n{master_df['Rank'].value_counts()}")
-    return master_df
