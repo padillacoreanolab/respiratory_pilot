@@ -1,0 +1,108 @@
+RESPIRATION PIPELINE: PREPROCESSING, BREATH DETECTION, REVIEW, AND BORIS ALIGNMENT
+Padilla-Coreano Lab, respiration project (Sequioa Smith)
+Last updated: 2026-10-27
+Code: respiratory_pilot repository, src/rsp/original_method.py (preprocessing and detection)
+
+Use these exact settings so results match across people and computers.
+
+
+1. INPUT
+--------
+- Signal: pressure sensor on the nasal cannula, recorded by Trodes as analog channel ECU_Ain1.
+- Units: raw ADC counts (16-bit integers).
+- Sampling rate: 20 kHz (Trodes clock rate 20000).
+- Time: each raw sample has a Trodes acquisition tick. Recording time (s) = (tick - first tick) / 20000.
+
+
+2. PREPROCESSING (raw 20 kHz -> 100 Hz signal)
+-----------------------------------------------
+Step 1  Center: subtract the median of the whole recording.
+Step 2  Clip: clip at +/- 10 x MAD (MAD = median absolute value of the centered signal).
+        Skipped if MAD = 0.
+Step 3  Low-pass: Butterworth, order 4, 50 Hz, zero-phase (scipy.signal.filtfilt).
+Step 4  Downsample to 100 Hz: scipy.signal.resample_poly(x, 1, 200).
+        (For a file not recorded at 20 kHz, use resample_poly(x, 100, fs) instead.)
+Step 5  Band-pass: Butterworth, order 2, 0.1-20 Hz, zero-phase.
+        NeuroKit2 signal_filter(lowcut=0.1, highcut=20, sampling_rate=100, order=2),
+        which is scipy butter(..., output='sos') + sosfiltfilt.
+
+The 0.1 Hz high-pass removes slow baseline drift. Breath SIZE still changes over a session
+(for example 11.3 shrinks about 3x mid-recording); that is amplitude, not drift.
+
+
+3. BREATH DETECTION
+-------------------
+Step 6  Peaks: scipy.signal.find_peaks(y - mean(y), distance=8).
+        8 samples at 100 Hz = 80 ms minimum spacing. No height or prominence threshold.
+Step 7  Peaks are found separately within each phase (baseline, cagemate). Each phase is
+        mean-subtracted before find_peaks.
+Each detected peak = one breath (inhalation peak). Breathing rate = 1 / inter-breath interval.
+
+Known limit: during fast sniffing (about 11/s), two breaths can come less than 80 ms apart and
+the detector keeps only the taller one. Reviewers add these by hand (see section 4).
+
+
+4. HUMAN REVIEW (every recording, every 5 s page)
+--------------------------------------------------
+- Review pages (HTML, Chrome or Edge) show the 100 Hz signal, the detected peaks, and the
+  synced video. Built by scripts/build_peak_review_html.py.
+- Display starts with a 25 ADC prominence floor (display only; floor 0 = the raw detector).
+- Reviewers remove wrong peaks, add missed breaths, and mark stretches with no readable
+  breathing as UNUSABLE (gray). Nothing is masked automatically.
+- Rule for small peaks: keep it if it is a full small cycle (up, then down to a trough) in the
+  rhythm of its neighbors; remove it if it is a bump on the side of a bigger breath.
+- Output per recording: <recording>_original100_reviewed_peaks.csv and
+  <recording>_original100_peak_review.json, written into the H5 by
+  scripts/apply_peak_review_to_h5.py (group respiration/manual_reviewed_breaths_original100).
+- Final breaths = reviewed breaths. Unusable stretches are excluded, and no breath interval
+  is measured across them.
+
+
+5. ALIGNING BORIS EVENTS TO RESPIRATION
+---------------------------------------
+Trodes records the camera and the pressure sensor on the same 20 kHz clock.
+The .videoTimeStamps file in each .rec folder lists the Trodes tick of every video frame.
+
+Step 1  BORIS gives each event start/stop in media seconds (seconds into the mp4).
+Step 2  Frame = media seconds x video frame rate (about 15 fps for cohort 2).
+Step 3  Look up (interpolate) that frame's Trodes tick from .videoTimeStamps.
+Step 4  Recording time = (frame tick - first respiration tick) / 20000.
+        This is the same time axis as the breath times.
+Each H5 stores the recording time of every frame as video/recording_time_s.
+
+Checks (processing stops if any fail):
+- Video frame count = number of video timestamps.
+- BORIS "Media duration" = video length (within 0.2 s or 2 frames).
+- BORIS "Time offset" = 0.
+- Trodes clock never runs backwards (gaps and repeated ticks are logged).
+
+Not yet verified (alignment is PROVISIONAL):
+- Assumes a constant frame rate in the mp4 (frame n = n-th timestamp).
+- BORIS frame-index convention: one script uses BORIS frame index minus 1, another uses
+  media seconds x fps. They can differ by 1 frame (about 67 ms at 15 fps), about one breath
+  during fast sniffing. To settle: use media seconds x fps everywhere.
+- No independent sync check yet. Plan: confirm that air-push pressure spikes land on the
+  video frame where the air is pushed (noted in 11.2, 11.3, 13.1, 14.1).
+
+
+6. SOFTWARE VERSIONS USED
+-------------------------
+Python 3, numpy 1.26.4, scipy 1.15.2, neurokit2 0.2.10, h5py.
+
+
+7. MINIMAL CODE
+---------------
+import numpy as np, neurokit2 as nk
+from scipy.signal import butter, filtfilt, resample_poly, find_peaks
+
+def preprocess(raw, fs=20000):
+    x = raw.astype(float) - np.median(raw)
+    mad = np.median(np.abs(x))
+    if mad > 0:
+        x = np.clip(x, -10 * mad, 10 * mad)
+    b, a = butter(4, 50 / (fs / 2), btype='low')
+    x = resample_poly(filtfilt(b, a, x), 100, int(fs))
+    return nk.signal_filter(x, lowcut=0.1, highcut=20, sampling_rate=100, order=2)
+
+def detect(y_phase):  # run once per phase
+    return find_peaks(y_phase - y_phase.mean(), distance=8)[0]

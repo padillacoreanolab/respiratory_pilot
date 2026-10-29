@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Peak Review</title>
+<style>
+:root{--bg:#fff;--fg:#1d1d1f;--muted:#6b6b70;--line:#d9d9de;--panel:#f5f5f7;--trace:#1677b8;--kept:#178a3c;--removed:#d62728;--added:#e58a00;--mask:rgba(214,39,40,.13);--view:rgba(22,119,184,.18);--visited:#178a3c;--drop:rgba(123,79,214,.20);--dropline:#7b4fd6;--excl:rgba(90,90,100,.30)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17171a;--fg:#ececf0;--muted:#9a9aa3;--line:#34343a;--panel:#212126;--trace:#5aa9e6;--kept:#4cc46f;--removed:#ff5a5a;--added:#ffb02e;--mask:rgba(255,90,90,.16);--view:rgba(90,169,230,.22);--visited:#4cc46f;--drop:rgba(169,137,240,.24);--dropline:#a989f0;--excl:rgba(170,170,180,.28)}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:baseline;padding:12px 16px 4px}
+h1{font-size:17px;margin:0}
+.sub{color:var(--muted);font-size:12.5px}
+.bar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:8px 16px}
+.bar label{display:flex;gap:6px;align-items:center;color:var(--muted)}
+input[type=number]{width:76px;padding:4px 6px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;font:inherit}
+button{padding:5px 11px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;font:inherit;cursor:pointer}
+button:hover{border-color:var(--muted)}
+button.on{background:var(--fg);border-color:var(--fg);color:var(--bg)}
+button.primary{background:var(--trace);border-color:var(--trace);color:#fff}
+#stats{display:flex;flex-wrap:wrap;gap:4px 16px;padding:0 16px 6px;font-variant-numeric:tabular-nums}
+.chip{display:inline-flex;gap:6px;align-items:center}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.wrap{padding:0 16px}
+canvas{display:block;width:100%;touch-action:none}
+#main{height:min(58vh,520px);border:1px solid var(--line);border-radius:8px;cursor:crosshair}
+#over{height:118px;margin-top:8px;border:1px solid var(--line);border-radius:8px;cursor:pointer}
+#msg{min-height:20px;padding:6px 16px;color:var(--muted);font-size:12.5px}
+details{padding:0 16px 16px;color:var(--muted);font-size:13px}
+.chips{display:flex;flex-wrap:wrap;gap:4px}
+.chip-w{padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;cursor:pointer;background:var(--bg);color:var(--fg)}
+.chip-w.done{background:var(--kept);border-color:var(--kept);color:#fff}
+.chip-w.cur{outline:2px solid var(--trace);outline-offset:1px}
+#vidrow{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:flex-start;padding:0 16px 8px}
+#vid{height:min(34vh,300px);max-width:100%;background:#000;border-radius:8px}
+#vidctl{display:flex;flex-direction:column;gap:6px;min-width:220px}
+#vidctl label{display:flex;gap:6px;align-items:center;color:var(--muted)}
+#vclock{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12.5px}
+#vpick{display:none;color:var(--removed);font-size:12.5px}
+kbd{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:0 5px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Peak review</h1>
+  <span class="sub" id="sub"></span>
+</header>
+<div class="bar">
+  <label>Prominence floor (ADC) <input type="number" id="floor" step="1" min="0"></label>
+  <label>Window (s) <input type="number" id="win" step="1" min="0.5" max="60"></label>
+  <label>Go to (s) <input type="number" id="goto" step="1" min="0"></label>
+  <button id="prev">◀ Prev</button><button id="next">Next ▶</button>
+  <button id="undo">Undo</button>
+  <button id="excl" title="Drag across a stretch you judge unusable; click a gray stretch to remove it">Mark unusable (E)</button>
+  <label title="Automatic suggestions only; they never remove anything"><input type="checkbox" id="hints"> Show automatic flags</label>
+  <button id="save" class="primary">Save CSV + JSON</button>
+  <button id="load">Load review JSON…</button><input type="file" id="file" accept=".json" hidden>
+</div>
+<section id="val">
+  <div class="bar" style="padding-top:0">
+    <b>Full review</b>
+    <button id="pprev">◀ Page</button><button id="pnext">Page ▶</button>
+    <button id="pdone" class="primary">Page reviewed ✓, next (Space)</button>
+    <button id="punrev">Next unreviewed (N)</button>
+    <span id="pprog" style="font-variant-numeric:tabular-nums"></span>
+  </div>
+  <div id="wsum" class="sub" style="padding:0 16px 6px"></div>
+</section>
+<div id="stats"></div>
+<div id="vidrow" hidden>
+  <video id="vid" muted playsinline preload="auto"></video>
+  <div id="vidctl">
+    <label><input type="checkbox" id="vshow" checked> Show video</label>
+    <button id="vplay">▶ Play this page (P)</button>
+    <label>Speed <select id="vrate"><option>0.25</option><option selected>0.5</option><option>1</option><option>2</option></select></label>
+    <label title="When paused, the video jumps to the time under your mouse on the trace"><input type="checkbox" id="vfollow" checked> Video follows mouse</label>
+    <span id="vclock"></span>
+    <span id="vpick">Video didn't load from its drive. Choose the file: <input type="file" id="vfile" accept="video/mp4"></span>
+  </div>
+</div>
+<div class="wrap"><canvas id="main"></canvas><canvas id="over"></canvas></div>
+<div id="msg"></div>
+<details open>
+  <summary>How to review</summary>
+  <p><b>Click</b> a green peak to remove it (red ×); click it again to restore it.
+  <b>Shift+click</b> or <b>right-click</b> on a missed breath to add a peak (orange); it snaps to the highest point within ±30 ms. Click an orange peak to delete it.
+  <kbd>←</kbd>/<kbd>→</kbd> previous/next page, <kbd>↑</kbd>/<kbd>↓</kbd> zoom, <kbd>Ctrl+Z</kbd> or <kbd>U</kbd> undo, <kbd>S</kbd> save. Click or drag the overview strip to jump.</p>
+  <p><b>Full review:</b> the recording is split into consecutive 5 s pages, and you look at every one. On each page, fix every peak <i>between the dashed lines</i> (remove wrong ones, add missed breaths, mark anything unreadable as unusable), then press <kbd>Space</kbd> to mark the page reviewed and move to the next. <kbd>N</kbd> jumps to the next page not yet reviewed. The strip under the overview turns green as pages are reviewed. Judge each cycle from the trace, not from whether a marker is already there. Press <kbd>Space</kbd> again on a reviewed page to un-mark it.</p>
+  <p><b>Video:</b> the cagemate video plays above the trace, matched to it through the camera's frame timestamps. The red line on the trace marks the video's current moment. <kbd>P</kbd> (or <b>Play this page</b>) plays the current page and stops at its end. While paused, moving the mouse over the trace moves the video to that time, so you can see what the mouse and tubing were doing during a stretch before judging it.</p>
+  <p><b>Nothing is masked automatically.</b> The whole recording is shown and searched for peaks. You decide what is unusable: press <kbd>E</kbd> (or <b>Mark unusable</b>) and drag across a stretch with no readable breathing. It turns gray, its peaks fade and stop counting, and no breath interval crosses it. In that mode, click a gray stretch to remove it; <kbd>U</kbd> undoes. Small but regular cycles are breaths: keep them.</p>
+  <p><b>Automatic flags</b> (off by default; tick <i>Show automatic flags</i>): red = very large spikes (&gt;20 robust SD, e.g. air pushes), purple = low amplitude (&lt;20% of the 2-minute rolling median for ≥1 s). They only point to places worth a look and never remove anything. <kbd>G</kbd>/Shift+<kbd>G</kbd> jumps between purple flags. The overview's lower lane is breath amplitude (log scale), with that 20% line dashed.</p>
+  <p>Edits are kept in this browser automatically, but only <b>Save</b> writes files: <code>_reviewed_peaks.csv</code> and <code>_peak_review.json</code> go to your Downloads folder. Move them into <code class="savehint">manual_peak_review/saved_reviews/</code>. To resume on another computer, use <b>Load review JSON</b>.
+  Changing the floor keeps your edits.</p>
+</details>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const Y = new Float32Array(Uint8Array.from(atob(D.y_b64), c => c.charCodeAt(0)).buffer);
+const N = D.n, FS = D.fs, T = i => D.t0 + i / FS, DUR = N / FS;
+const SPIKES = D.auto_spike || [], HINTS = () => document.getElementById('hints').checked;
+const DROPS = D.dropouts || [], DROP_S = DROPS.reduce((s, [a, b]) => s + (b - a), 0) / D.fs;
+const A = D.amp_log10 || [], ACUT = D.amp_cut_log10 || [];
+const ALO = A.length ? Math.min(...A, ...ACUT) : 0, AHI = A.length ? Math.max(...A) : 1;
+// ---------- synced video ----------
+const vid = document.getElementById('vid');
+const FREC = D.frame_rec_b64 ? new Float64Array(Uint8Array.from(atob(D.frame_rec_b64), c => c.charCodeAt(0)).buffer) : new Float64Array(0);
+const VFPS = D.video_fps || 15, HAS_VIDEO = !!(D.video_src && FREC.length);
+let vUntil = null, vCursor = null, vLastSeek = 0;
+const recToVideo = t => { let lo = 0, hi = FREC.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; FREC[m] < t ? lo = m + 1 : hi = m; }
+  if (lo > 0 && t - FREC[lo - 1] < FREC[lo] - t) lo--; return (lo + 0.5) / VFPS; };
+const videoToRec = vs => { const f = Math.min(FREC.length - 1, Math.max(0, vs * VFPS)), i = Math.min(FREC.length - 2, Math.floor(f));
+  return FREC[i] + (f - i) * (FREC[i + 1] - FREC[i]); };
+const SNAP = Math.round(0.03 * FS), KEY = 'peakreview:' + (D.method || 'local400') + ':' + D.h5;
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+const S = {floor: D.floor, removed: new Set(), added: new Set(), history: [], start: D.t0, win: 5.5};
+let kept = new Int32Array(0), keptSet = new Set();
+
+function refilter() {
+  const out = [];
+  for (let i = 0; i < D.cand.length; i++) if (D.prom[i] >= Math.max(S.floor, D.rel[i])) out.push(D.cand[i]);
+  kept = Int32Array.from(out); keptSet = new Set(out);
+}
+const lower = (arr, v) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; arr[m] < v ? lo = m + 1 : hi = m; } return lo; };
+// ---------- full review in consecutive pages ----------
+const PAGE_S = 5, NPAGE = Math.ceil(DUR / PAGE_S);
+S.reviewed = new Set(); S.page = 0;
+const pageBounds = i => [Math.round(i * PAGE_S * FS), Math.min(N, Math.round((i + 1) * PAGE_S * FS))];
+function pageCounts(i) {
+  const [a, b] = pageBounds(i);
+  let det = 0, fp = 0, miss = 0;
+  for (let j = lower(kept, a); j < kept.length && kept[j] < b; j++) { if (inExcl(kept[j])) continue; det++; if (S.removed.has(kept[j])) fp++; }
+  for (const k of S.added) if (k >= a && k < b && !inExcl(k)) miss++;
+  return {det, fp, miss};
+}
+function summarize() {
+  let det = 0, fp = 0, miss = 0;
+  for (const i of S.reviewed) { const c = pageCounts(i); det += c.det; fp += c.fp; miss += c.miss; }
+  const tp = det - fp;
+  return {pages_reviewed: S.reviewed.size, pages_total: NPAGE, reviewed_fraction: S.reviewed.size / NPAGE,
+          detected: det, removed_wrong: fp, added_missed: miss,
+          precision: det ? tp / det : null, recall: tp + miss ? tp / (tp + miss) : null};
+}
+function gotoPage(i) { S.page = Math.min(NPAGE - 1, Math.max(0, i)); S.win = PAGE_S + 0.5; S.start = D.t0 + S.page * PAGE_S - 0.25;
+  if (HAS_VIDEO && $('vshow').checked) { vUntil = null; vid.pause(); vid.currentTime = recToVideo(T(pageBounds(S.page)[0])); vCursor = T(pageBounds(S.page)[0]); }
+  draw(); }
+function playPage() { if (!HAS_VIDEO) return note('No video for this recording.');
+  if (!vid.paused) { vid.pause(); vUntil = null; return; }
+  const [pa, pb] = pageBounds(S.page); vid.currentTime = recToVideo(T(pa)); vUntil = recToVideo(T(pb)); vid.playbackRate = +$('vrate').value; vid.play(); }
+function videoTick() {
+  if (HAS_VIDEO && !vid.paused) {
+    if (vUntil != null && vid.currentTime >= vUntil) { vid.pause(); vUntil = null; }
+    vCursor = videoToRec(vid.currentTime); draw();
+  }
+  if (HAS_VIDEO) $('vclock').textContent = `video ${vid.currentTime.toFixed(2)} s · frame ${Math.floor(vid.currentTime * VFPS)} · recording ${videoToRec(vid.currentTime).toFixed(2)} s`;
+  requestAnimationFrame(videoTick);
+}
+const nextUnreviewed = from => { for (let k = 1; k <= NPAGE; k++) { const i = (from + k) % NPAGE; if (!S.reviewed.has(i)) return i; } return -1; };
+function markReviewed() {
+  if (S.reviewed.has(S.page)) { S.reviewed.delete(S.page); autosave(); return draw(); }
+  S.reviewed.add(S.page); autosave();
+  if (S.reviewed.size === NPAGE) { note('Every page reviewed. Save to write the files.'); return draw(); }
+  gotoPage(S.page + 1 < NPAGE && !S.reviewed.has(S.page + 1) ? S.page + 1 : nextUnreviewed(S.page));
+}
+const pct = v => v == null ? '–' : (100 * v).toFixed(1) + '%';
+function renderVal() {
+  const c = summarize();
+  $('pprog').innerHTML = `page <b>${S.page + 1}</b>/${NPAGE}${S.reviewed.has(S.page) ? ' ✓' : ''} · <b>${c.pages_reviewed}/${NPAGE} reviewed (${pct(c.reviewed_fraction)})</b>`;
+  const pc = pageCounts(S.page);
+  $('wsum').innerHTML = `This page: ${pc.det} detected, ${pc.fp} removed, ${pc.miss} added &nbsp;|&nbsp; Reviewed pages so far: ` +
+    `${c.removed_wrong} wrong and ${c.added_missed} missed of ${c.detected} detected · detector precision ${pct(c.precision)}, recall ${pct(c.recall)}`;
+  $('pdone').textContent = S.reviewed.has(S.page) ? 'Reviewed ✓ (Space to un-mark)' : 'Page reviewed ✓, next (Space)';
+}
+// ---------- reviewer exclusions (the only thing that makes signal unusable) ----------
+S.excluded = []; S.exMode = false;
+const inExcl = k => S.excluded.some(([a, b]) => k >= a && k < b);
+const EXCL_S = () => S.excluded.reduce((s, [a, b]) => s + (b - a), 0) / FS;
+const finalPeaks = () => [...new Set([...kept].filter(k => !S.removed.has(k)).concat([...S.added]))].filter(k => !inExcl(k)).sort((a, b) => a - b);
+
+// ---------- persistence ----------
+function runs(arr) { const r = []; let a = -1; arr.forEach((v, i) => { if (v && a < 0) a = i; if (!v && a >= 0) { r.push([a, i]); a = -1; } }); if (a >= 0) r.push([a, arr.length]); return r; }
+function snapshot() {
+  const p = finalPeaks();
+  return {h5: D.h5, saved: new Date().toISOString().slice(0, 19), method: D.method || 'local400',
+          detector: D.method === 'original100' ? 'src/rsp/original_method.py' : 'src/rsp/local_peaks.py',
+          minimum_prominence_adc: S.floor, relative_prominence: D.relative_prominence, minimum_interval_s: D.minimum_interval_s,
+          fs: FS, n_detected: kept.length, n_final: p.length,
+          removed_samples: [...S.removed].sort((a, b) => a - b), added_samples: [...S.added].sort((a, b) => a - b),
+          signal: D.method_label, t0_s: D.t0,
+          excluded_intervals: S.excluded.map(([a, b]) => [a, b]).sort((x, y) => x[0] - y[0]), excluded_s: EXCL_S(),
+          last_view_start_s: S.start,
+          review_pages: {page_s: PAGE_S, n_pages: NPAGE, reviewed: [...S.reviewed].sort((a, b) => a - b)},
+          review_summary: summarize()};
+}
+function restore(o, source) {
+  if (o.h5 && o.h5 !== D.h5 && !confirm(`This review is for ${o.h5}, not ${D.h5}. Load anyway?`)) return;
+  if ((o.method || 'local400') !== (D.method || 'local400')) { note(`That review used the ${o.method || 'local400'} method; this page is ${D.method}. Sample numbers differ, so it was not loaded.`); return; }
+  S.removed = new Set(o.removed_samples || []); S.added = new Set(o.added_samples || []); S.history = [];
+  S.excluded = (o.excluded_intervals || []).map(([a, b]) => [a, b]);
+  if (o.minimum_prominence_adc != null) S.floor = o.minimum_prominence_adc;
+  if (o.last_view_start_s != null) S.start = o.last_view_start_s;
+  const rp = o.review_pages || {};
+  S.reviewed = new Set(rp.page_s === PAGE_S ? rp.reviewed || [] : []);
+  S.page = Math.min(NPAGE - 1, Math.max(0, Math.floor((S.start - D.t0 + 0.3) / PAGE_S)));
+  $('floor').value = S.floor; refilter(); clampStart();
+  note(`Loaded ${source}: ${S.removed.size} removed, ${S.added.size} added, ${S.excluded.length} unusable stretches.`);
+}
+function autosave() { try { localStorage.setItem(KEY, JSON.stringify(snapshot())); } catch (e) {} }
+function download(name, text, type) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], {type})); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function save() {
+  const p = finalPeaks();
+  const csv = 'sample,time_s,source\n' + p.map(k => `${k},${+T(k).toFixed(4)},${keptSet.has(k) ? 'detected' : 'added'}`).join('\n') + '\n';
+  const tag = D.method === 'original100' ? '_original100' : '';
+  download(`${D.mouse}${tag}_reviewed_peaks.csv`, csv, 'text/csv');
+  setTimeout(() => download(`${D.mouse}${tag}_peak_review.json`, JSON.stringify(snapshot(), null, 2), 'application/json'), 300);
+  note(`Saved ${p.length} peaks to Downloads. Move both files into ${D.save_hint || 'manual_peak_review/saved_reviews/'}.`);
+}
+
+// ---------- editing ----------
+function edit(kind, k) { S[kind].has(k) ? S[kind].delete(k) : S[kind].add(k); S.history.push([kind, k]); autosave(); draw(); }
+function undo() { const h = S.history.pop(); if (!h) return; const [kind, k] = h;
+  if (kind === 'excl+') S.excluded = S.excluded.filter(iv => iv !== k);
+  else if (kind === 'excl-') S.excluded.push(k);
+  else S[kind].has(k) ? S[kind].delete(k) : S[kind].add(k);
+  autosave(); draw(); }
+function toggleExMode() { S.exMode = !S.exMode; $('excl').classList.toggle('on', S.exMode); main.style.cursor = S.exMode ? 'col-resize' : 'crosshair';
+  note(S.exMode ? 'Unusable mode: drag across a stretch to mark it; click a gray stretch to remove it. Press E to leave.' : ''); }
+function note(t) { $('msg').textContent = t; }
+
+// ---------- drawing ----------
+const main = $('main'), over = $('over');
+const M = {l: 58, r: 12, t: 12, b: 28};
+let geo = null;
+
+function fit(cv) { const r = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w * r) || cv.height !== Math.round(h * r)) { cv.width = Math.round(w * r); cv.height = Math.round(h * r); }
+  const c = cv.getContext('2d'); c.setTransform(r, 0, 0, r, 0, 0); return [c, w, h]; }
+function niceStep(range, target) { const raw = range / target, p = 10 ** Math.floor(Math.log10(raw)), f = raw / p;
+  return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p; }
+function clampStart() { S.start = Math.min(Math.max(S.start, D.t0), D.t0 + DUR - S.win); }
+
+function draw() {
+  clampStart();
+  const a = Math.max(0, Math.floor((S.start - D.t0) * FS)), b = Math.min(N, Math.ceil((S.start + S.win - D.t0) * FS) + 1);
+  const [c, w, h] = fit(main), pw = w - M.l - M.r, ph = h - M.t - M.b;
+  let lo = Infinity, hi = -Infinity;
+  for (let i = a; i < b; i++) { const v = Y[i]; if (v === v) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+  if (!isFinite(lo)) { lo = -1; hi = 1; } const pad = 0.08 * (hi - lo) + 1; lo -= pad; hi += pad;
+  const X = t => M.l + (t - S.start) / S.win * pw, V = v => M.t + (hi - v) / (hi - lo) * ph;
+  geo = {X, V, a, b, pw};
+  c.clearRect(0, 0, w, h);
+  c.font = '11px system-ui,sans-serif'; c.fillStyle = css('--muted'); c.strokeStyle = css('--line'); c.lineWidth = 1;
+  const xs = niceStep(S.win, Math.max(3, pw / 110)); c.textAlign = 'center';
+  for (let t = Math.ceil(S.start / xs) * xs; t <= S.start + S.win; t += xs) {
+    const x = X(t); c.beginPath(); c.moveTo(x, M.t); c.lineTo(x, M.t + ph); c.stroke(); c.fillText(+t.toFixed(3) + ' s', x, h - 9); }
+  const ys = niceStep(hi - lo, 5); c.textAlign = 'right';
+  for (let v = Math.ceil(lo / ys) * ys; v <= hi; v += ys) {
+    const yy = V(v); c.beginPath(); c.moveTo(M.l, yy); c.lineTo(M.l + pw, yy); c.stroke(); c.fillText(+v.toFixed(1), M.l - 6, yy + 4); }
+  c.save(); c.translate(13, M.t + ph / 2); c.rotate(-Math.PI / 2); c.textAlign = 'center'; c.fillText('ADC counts (drift-reduced)', 0, 0); c.restore();
+  c.save(); c.beginPath(); c.rect(M.l, M.t, pw, ph); c.clip();
+  if (HINTS()) {
+    c.fillStyle = css('--mask');
+    for (const [ma, mb] of SPIKES) if (mb > a && ma < b) c.fillRect(X(T(ma)), M.t, X(T(mb)) - X(T(ma)), ph);
+    c.fillStyle = css('--drop');
+    for (const [ma, mb] of DROPS) if (mb > a && ma < b) c.fillRect(X(T(ma)), M.t, X(T(mb)) - X(T(ma)), ph);
+  }
+  c.fillStyle = css('--excl');
+  for (const [ma, mb] of S.excluded.concat(drag ? [drag] : [])) if (Math.max(ma, mb) > a && Math.min(ma, mb) < b) {
+    const x0 = X(T(Math.min(ma, mb))), x1 = X(T(Math.max(ma, mb))); c.fillRect(x0, M.t, x1 - x0, ph);
+    c.save(); c.fillStyle = css('--fg'); c.font = '11px system-ui,sans-serif'; c.fillText('unusable', Math.max(x0, M.l) + 4, M.t + 14); c.restore(); }
+  { const [pa, pb] = pageBounds(S.page), x0 = X(T(pa)), x1 = X(T(pb));
+    c.fillStyle = css('--panel'); c.globalAlpha = .7; c.fillRect(M.l, M.t, x0 - M.l, ph); c.fillRect(x1, M.t, M.l + pw - x1, ph); c.globalAlpha = 1;
+    c.strokeStyle = css('--fg'); c.setLineDash([5, 4]); c.lineWidth = 1.2; c.beginPath(); c.moveTo(x0, M.t); c.lineTo(x0, M.t + ph); c.moveTo(x1, M.t); c.lineTo(x1, M.t + ph); c.stroke(); c.setLineDash([]); }
+  c.strokeStyle = css('--trace'); c.lineWidth = 1.3; c.beginPath();
+  const per = (b - a) / pw;
+  if (per <= 12) { let pen = false; for (let i = a; i < b; i++) { const v = Y[i]; if (v !== v) { pen = false; continue; } pen ? c.lineTo(X(T(i)), V(v)) : c.moveTo(X(T(i)), V(v)); pen = true; } }
+  else for (let px = 0; px < pw; px++) { let mn = Infinity, mx = -Infinity;
+    for (let i = a + Math.floor(px * per); i < Math.min(b, a + Math.floor((px + 1) * per)); i++) { const v = Y[i]; if (v === v) { if (v < mn) mn = v; if (v > mx) mx = v; } }
+    if (mn <= mx) { c.moveTo(M.l + px + .5, V(mx)); c.lineTo(M.l + px + .5, V(mn)); } }
+  c.stroke();
+  let nk = 0, nr = 0, na = 0;
+  for (let j = lower(kept, a); j < kept.length && kept[j] < b; j++) {
+    const k = kept[j], x = X(T(k)), yy = V(Y[k]);
+    c.globalAlpha = inExcl(k) ? .25 : 1;
+    if (S.removed.has(k)) { nr++; c.strokeStyle = css('--removed'); c.lineWidth = 2; c.beginPath(); c.moveTo(x - 5, yy - 5); c.lineTo(x + 5, yy + 5); c.moveTo(x + 5, yy - 5); c.lineTo(x - 5, yy + 5); c.stroke(); }
+    else { nk++; c.strokeStyle = css('--kept'); c.lineWidth = 2; c.beginPath(); c.arc(x, yy, 5.5, 0, 7); c.stroke(); }
+  }
+  c.globalAlpha = 1; c.fillStyle = css('--added');
+  for (const k of S.added) if (k >= a && k < b) { na++; c.globalAlpha = inExcl(k) ? .25 : 1; c.beginPath(); c.arc(X(T(k)), V(Y[k]), 5.5, 0, 7); c.fill(); }
+  if (vCursor != null && vCursor >= S.start && vCursor <= S.start + S.win) {
+    c.strokeStyle = css('--removed'); c.lineWidth = 1.5; c.beginPath(); c.moveTo(X(vCursor), M.t); c.lineTo(X(vCursor), M.t + ph); c.stroke(); }
+  c.globalAlpha = 1; c.restore();
+  const total = finalPeaks().length;
+  $('stats').innerHTML =
+    `<span class="chip"><span class="dot" style="border:2px solid var(--kept)"></span>${nk} kept in view</span>` +
+    `<span class="chip"><span class="dot" style="background:var(--removed)"></span>${nr} removed in view (${S.removed.size} total)</span>` +
+    `<span class="chip"><span class="dot" style="background:var(--added)"></span>${na} added in view (${S.added.size} total)</span>` +
+    `<span>Session: <b>${total}</b> final peaks from ${kept.length} detected</span>` +
+    `<span class="chip"><span class="dot" style="background:var(--excl)"></span>${S.excluded.length} unusable stretches (${EXCL_S().toFixed(1)} s)</span>` +
+    (HINTS() ? `<span class="sub">automatic flags shown: ${SPIKES.length} spike, ${DROPS.length} low-amplitude (${DROP_S.toFixed(0)} s); suggestions only</span>` : '');
+  $('goto').value = +S.start.toFixed(2); $('win').value = S.win;
+  renderVal(); drawOverview();
+}
+
+let ov = null;
+function overviewBins(w) {
+  if (ov && ov.w === w) return ov;
+  const mn = new Float32Array(w).fill(Infinity), mx = new Float32Array(w).fill(-Infinity);
+  for (let i = 0; i < N; i++) { const v = Y[i]; if (v !== v) continue; const p = Math.floor(i / N * w); if (v < mn[p]) mn[p] = v; if (v > mx[p]) mx[p] = v; }
+  // Robust range (1.5x the 10th/90th percentile of per-pixel extremes) so huge spikes, which can cover
+  // several % of a recording, don't flatten the overview; they are clipped at the edges.
+  const lows = [...mn].filter(isFinite).sort((x, y) => x - y), highs = [...mx].filter(isFinite).sort((x, y) => x - y);
+  const q = (arr, f) => arr.length ? arr[Math.min(arr.length - 1, Math.floor(f * arr.length))] : 0;
+  const lo = 1.5 * q(lows, .1), hi = Math.max(1.5 * q(highs, .9), lo + 1);
+  return ov = {w, mn, mx, lo, hi};
+}
+function drawOverview() {
+  const [c, w, h] = fit(over), o = overviewBins(Math.floor(w)), ph = h - 8, TR = 60;
+  const X = t => (t - D.t0) / DUR * w, V = v => 2 + (o.hi - Math.min(o.hi, Math.max(o.lo, v))) / (o.hi - o.lo) * (TR - 4);
+  c.clearRect(0, 0, w, h);
+  if (HINTS()) {
+    c.fillStyle = css('--mask'); for (const [ma, mb] of SPIKES) c.fillRect(X(T(ma)), 0, Math.max(1, X(T(mb)) - X(T(ma))), ph);
+    c.fillStyle = css('--drop'); for (const [ma, mb] of DROPS) c.fillRect(X(T(ma)), 0, Math.max(1, X(T(mb)) - X(T(ma))), ph);
+  }
+  c.fillStyle = css('--excl'); for (const [ma, mb] of S.excluded) c.fillRect(X(T(ma)), 0, Math.max(2, X(T(mb)) - X(T(ma))), ph);
+  if (A.length) { // breath amplitude lane (log scale): minimum per pixel so short dips stay visible
+    const a0 = TR + 6, ah = ph - a0 - 2, AY = v => a0 + (AHI - v) / (AHI - ALO) * ah;
+    const col = (arr, fn) => { const out = new Float32Array(Math.floor(w)).fill(NaN); arr.forEach((v, k) => { const p = Math.floor(k / arr.length * out.length); out[p] = out[p] !== out[p] ? v : fn(out[p], v); }); return out; };
+    const amin = col(A, Math.min), cut = col(ACUT, Math.max);
+    c.strokeStyle = css('--line'); c.beginPath(); c.moveTo(0, a0 - 3); c.lineTo(w, a0 - 3); c.stroke();
+    c.strokeStyle = css('--muted'); c.setLineDash([4, 3]); c.beginPath(); cut.forEach((v, p) => { if (v === v) p ? c.lineTo(p, AY(v)) : c.moveTo(p, AY(v)); }); c.stroke(); c.setLineDash([]);
+    c.strokeStyle = css('--trace'); c.beginPath(); let pen = false; amin.forEach((v, p) => { if (v !== v) { pen = false; return; } pen ? c.lineTo(p + .5, AY(v)) : c.moveTo(p + .5, AY(v)); pen = true; }); c.stroke();
+    c.fillStyle = css('--muted'); c.font = '10px system-ui,sans-serif'; c.fillText('breath amplitude (log)', 4, a0 + 9);
+  }
+  c.strokeStyle = css('--trace'); c.lineWidth = 1; c.beginPath();
+  for (let p = 0; p < o.w; p++) if (o.mn[p] <= o.mx[p]) { c.moveTo(p + .5, V(o.mx[p])); c.lineTo(p + .5, V(o.mn[p])); }
+  c.stroke();
+  for (let i = 0; i < NPAGE; i++) { // review progress lane: green = reviewed, light = not yet
+    const [pa, pb] = pageBounds(i); c.fillStyle = S.reviewed.has(i) ? css('--kept') : css('--line');
+    c.fillRect(X(T(pa)), h - 6, Math.max(1, X(T(pb)) - X(T(pa)) - 0.5), 5); }
+  c.fillStyle = css('--view'); c.fillRect(X(S.start), 0, Math.max(2, X(S.start + S.win) - X(S.start)), ph);
+}
+function nextDropout(d) { if (!HINTS()) { $('hints').checked = true; }
+  if (!DROPS.length) { draw(); return note('No low-amplitude flags in this recording.'); }
+  const mids = DROPS.map(([a, b]) => T((a + b) / 2)), cur = S.start + S.win / 2;
+  const k = d > 0 ? mids.findIndex(m => m > cur + .01) : mids.map(m => m < cur - .01).lastIndexOf(true);
+  const m = mids[k < 0 ? (d > 0 ? 0 : mids.length - 1) : k]; S.start = m - S.win / 2; draw(); }
+
+// ---------- interaction ----------
+function nearest(list, px, maxPx) { let best = null, bd = maxPx;
+  for (const k of list) { const d = Math.abs(geo.X(T(k)) - px); if (d <= bd) { bd = d; best = k; } } return best; }
+function onClick(e, adding) {
+  const r = main.getBoundingClientRect(), px = e.clientX - r.left;
+  if (px < M.l || px > r.width - M.r) return;
+  const inView = [], addedView = [...S.added].filter(k => k >= geo.a && k < geo.b);
+  for (let j = lower(kept, geo.a); j < kept.length && kept[j] < geo.b; j++) inView.push(kept[j]);
+  const hitAdded = nearest(addedView, px, 9);
+  if (hitAdded !== null) return edit('added', hitAdded);
+  const hit = nearest(inView, px, 9);
+  if (!adding) { if (hit !== null) edit('removed', hit); return; }
+  if (hit !== null) { if (S.removed.has(hit)) edit('removed', hit); return; }
+  const t = S.start + (px - M.l) / geo.pw * S.win, c0 = Math.round((t - D.t0) * FS);
+  let best = -1, bv = -Infinity;
+  for (let i = Math.max(0, c0 - SNAP); i < Math.min(N, c0 + SNAP); i++) if (Y[i] === Y[i] && Y[i] > bv) { bv = Y[i]; best = i; }
+  if (best < 0) return note('No signal here (masked).');
+  if (keptSet.has(best)) { if (S.removed.has(best)) edit('removed', best); return; }
+  edit('added', best);
+}
+let drag = null;
+const sampleAt = e => { const r = main.getBoundingClientRect(); const t = S.start + (e.clientX - r.left - M.l) / geo.pw * S.win;
+  return Math.min(N, Math.max(0, Math.round((t - D.t0) * FS))); };
+main.addEventListener('pointerdown', e => { if (!S.exMode || e.button !== 0) return; main.setPointerCapture(e.pointerId); const k = sampleAt(e); drag = [k, k]; });
+main.addEventListener('pointermove', e => { if (drag) { drag[1] = sampleAt(e); draw(); } });
+main.addEventListener('pointerup', e => { if (!drag) return; const [k0, k1] = drag; drag = null;
+  const a = Math.min(k0, k1), b = Math.max(k0, k1);
+  if (Math.abs(geo.X(T(b)) - geo.X(T(a))) < 5) { // a click: remove the stretch under it
+    const hit = S.excluded.find(([x, y]) => a >= x && a < y);
+    if (hit) { S.excluded = S.excluded.filter(iv => iv !== hit); S.history.push(['excl-', hit]); autosave(); }
+  } else { const iv = [a, b]; S.excluded.push(iv); S.history.push(['excl+', iv]); autosave(); note(`Marked ${((b - a) / FS).toFixed(2)} s unusable.`); }
+  draw(); });
+main.addEventListener('click', e => { if (!S.exMode) onClick(e, e.shiftKey); });
+main.addEventListener('contextmenu', e => { e.preventDefault(); if (!S.exMode) onClick(e, true); });
+main.addEventListener('mousemove', e => { if (!geo) return; const r = main.getBoundingClientRect();
+  const t = S.start + (e.clientX - r.left - M.l) / geo.pw * S.win; if (!(t >= S.start && t <= S.start + S.win)) return;
+  note(`t = ${t.toFixed(3)} s`);
+  if (HAS_VIDEO && $('vshow').checked && $('vfollow').checked && vid.paused && !drag && performance.now() - vLastSeek > 60) {
+    vLastSeek = performance.now(); vid.currentTime = recToVideo(t); vCursor = t; draw(); } });
+function overJump(e) { const r = over.getBoundingClientRect(); gotoPage(Math.floor((e.clientX - r.left) / r.width * DUR / PAGE_S)); }
+over.addEventListener('pointerdown', e => { over.setPointerCapture(e.pointerId); overJump(e); });
+over.addEventListener('pointermove', e => { if (e.buttons) overJump(e); });
+
+const page = f => gotoPage(S.page + Math.sign(f));
+const zoom = f => { const mid = S.start + S.win / 2; S.win = Math.min(60, Math.max(0.5, S.win * f)); S.start = mid - S.win / 2; draw(); };
+$('prev').onclick = () => page(-0.8); $('next').onclick = () => page(0.8);
+$('undo').onclick = undo; $('save').onclick = save;
+$('vplay').onclick = playPage; $('vrate').onchange = e => { vid.playbackRate = +e.target.value; };
+$('vshow').onchange = e => { vid.hidden = !e.target.checked; if (!e.target.checked) { vid.pause(); vCursor = null; } draw(); };
+vid.addEventListener('play', () => $('vplay').textContent = '❚❚ Pause (P)'); vid.addEventListener('pause', () => $('vplay').textContent = '▶ Play this page (P)');
+vid.addEventListener('error', () => { $('vpick').style.display = 'inline'; });
+$('vfile').onchange = e => { const f = e.target.files[0]; if (f) { vid.src = URL.createObjectURL(f); $('vpick').style.display = 'none'; } }; $('excl').onclick = toggleExMode; $('hints').onchange = () => draw();
+$('pprev').onclick = () => gotoPage(S.page - 1); $('pnext').onclick = () => gotoPage(S.page + 1); $('pdone').onclick = markReviewed;
+$('punrev').onclick = () => { const i = nextUnreviewed(S.page); i < 0 ? note('Every page is reviewed.') : gotoPage(i); };
+$('load').onclick = () => $('file').click();
+$('file').onchange = async e => { const f = e.target.files[0]; if (!f) return;
+  try { restore(JSON.parse(await f.text()), f.name); autosave(); draw(); } catch (err) { note('Could not read that file: ' + err.message); } e.target.value = ''; };
+$('floor').onchange = e => { const v = parseFloat(e.target.value); if (!(v >= 0)) return; S.floor = v; refilter(); autosave(); draw(); };
+$('win').onchange = e => { const v = parseFloat(e.target.value); if (v > 0) { S.win = Math.min(60, Math.max(0.5, v)); draw(); } };
+$('goto').onchange = e => { const v = parseFloat(e.target.value); if (v === v) gotoPage(Math.floor((v - D.t0) / PAGE_S)); };
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); return undo(); }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const act = {ArrowRight: () => page(0.8), ArrowLeft: () => page(-0.8), ArrowUp: () => zoom(0.5), ArrowDown: () => zoom(2), u: undo, U: undo, s: save, S: save, ' ': markReviewed, Enter: markReviewed, g: () => nextDropout(1), G: () => nextDropout(-1), e: toggleExMode, E: toggleExMode, p: playPage, P: playPage, n: () => $('punrev').onclick(), N: () => $('punrev').onclick()}[e.key];
+  if (act) { e.preventDefault(); act(); }
+});
+addEventListener('resize', () => { ov = null; draw(); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => draw());
+
+$('title').textContent = `Peak review: ${D.mouse}`;
+$('sub').textContent = `${D.h5} · ${FS} Hz · ${Math.round(DUR)} s · ${D.method_label || ''} · candidates are not validated breaths`;
+document.title = `Peak Review ${D.mouse}`;
+$('floor').value = S.floor;
+document.querySelectorAll('.savehint').forEach(el => { el.textContent = D.save_hint || el.textContent; });
+if (HAS_VIDEO) { $('vidrow').hidden = false; vid.src = D.video_src; requestAnimationFrame(videoTick); }
+refilter();
+let resumed = false;
+try { const prev = localStorage.getItem(KEY); if (prev) { restore(JSON.parse(prev), 'saved browser session'); resumed = true; } } catch (e) {}
+if (!resumed) gotoPage(0); else { const i = S.reviewed.has(S.page) ? nextUnreviewed(S.page) : S.page; gotoPage(i < 0 ? S.page : i); }
+</script>
+</body>
+</html>

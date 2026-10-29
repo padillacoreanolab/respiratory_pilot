@@ -1,0 +1,95 @@
+R34 SHARED H5 FORMAT (schema "r34-shared 2.0")
+Padilla-Coreano Lab, University of Florida. Respiration + behavior, one file per recording.
+Built by scripts/convert_shared_h5.py from outputs/r34_shared/manifest.json (scripts/build_shared_manifest.py).
+Files: D:/R34_shared_h5/<cohort>/<session_id>.h5   (about 5-8 MB each)
+
+ONE CLOCK FOR EVERYTHING
+All times named *_s (except *_media_s) are seconds on the recording clock:
+    seconds = (Trodes acquisition tick - respiration.recording_tick_origin) / respiration.clock_rate_hz (20000)
+Respiration samples, breaths, video frames, BORIS events and SLEAP poses all use this clock, so they can be
+compared directly (no offsets needed).
+
+
+ROOT ATTRIBUTES
+  schema, session_id, experiment (Valence / Cagemate / Isolation), cohort, phase,
+  subject_id (e.g. "11.2"), subject_rank (-1 = not recorded here), created, citation, format_doc
+
+respiration/                        attrs: sensor, clock_rate_hz, recording_tick_origin
+  raw/
+    pressure_adc         int16      raw pressure, ADC counts (uncalibrated), 20 kHz
+    acquisition_ticks    uint32     Trodes tick of every raw sample
+                                    attrs: repeated_ticks, clock_gaps (wireless recordings repeat some ticks;
+                                    each sample keeps its own tick, so time is never shifted)
+  preprocessed/
+    pressure             float32    100 Hz filtered signal (method below)
+    time_s               float64    recording time of each 100 Hz sample (= tick of its source raw sample)
+    source_sample_index  int32      index into raw/ of each 100 Hz sample
+                                    attrs: sampling_rate_hz, method, code, citation
+  breaths/
+    detected_index       int32      index into preprocessed/ of each detected peak (candidate breath)
+    detected_time_s      float64    recording time of each detected peak
+    detected_prominence  float32    peak prominence, ADC counts (reviewers start at a 25 ADC display floor)
+    reviewed/                       FINAL breaths after human review (empty until review is done;
+                                    filled by scripts/apply_peak_review_to_h5.py). Use these for analysis.
+
+phases/
+  boundaries_s           float64    phase edges, recording clock (n_phases + 1 values)
+  labels                 string     e.g. ["baseline", "cagemate"]; one phase for separate recordings
+                                    attrs: source
+
+video/
+  frame_time_s           float64    recording time of every video frame (from .videoTimeStamps)
+  acquisition_ticks      uint32     Trodes tick of every frame
+                                    attrs: filename, fps, frame_count, frame_count_matches_timestamps
+
+behavior/
+  boris/                            one row per BORIS event (behavior/boris_0, boris_1 if several coders)
+    subject, behavior, behavior_type      strings as coded (behavior_type STATE or POINT)
+    start_media_s, stop_media_s           seconds in the media file the coder used
+    start_s, stop_s                       recording clock (NaN if not aligned)
+                                    attrs: alignment_status, source_file, coder_media_file,
+                                           coder_media_duration_s, coder_fps, method
+  sleap/                            (only where tracking exists)
+    pose_xy              float32    frames x tracks x nodes x 2 (x, y pixels); NaN = not found
+    point_scores         float32    frames x tracks x nodes
+    track_names, node_names         strings
+    frame_time_s         float64    recording time of each frame
+                                    attrs: source_file, frames_match_video, identity_status
+
+provenance/
+  sources_json                      source files with size and SHA-256
+  trodes_headers_json               Trodes file headers
+                                    attrs: builder, builder_sha256, software versions
+
+
+PREPROCESSING (lab's original method; see docs/respiration_pipeline.txt)
+  1 subtract median   2 clip at +/-10 MAD   3 Butterworth order-4 50 Hz low-pass, zero-phase
+  4 resample to 100 Hz (resample_poly)       5 Butterworth order-2 0.1-20 Hz band-pass, zero-phase
+  Breaths: find_peaks(distance = 8 samples = 80 ms), no threshold, per phase; then human review.
+  On gap-free recordings this equals src/rsp/original_method.py exactly (checked).
+
+
+BORIS ALIGNMENT RULE
+  recording time = frame time of (media seconds x video fps), linear between frames.
+  Used only when the coder's media file has the same length as the original video (within 2 frames + 0.1 s)
+  and BORIS time offset is 0. Otherwise alignment_status says why and start_s/stop_s are NaN; the coded
+  media seconds are kept so the event can be aligned once the trim/offset is known.
+  Not yet independently validated (planned: air-push pressure spikes vs. video).
+
+
+CITATIONS
+  Intranasal cannula pressure recording in freely moving mice:
+    Wesson DW, Donahou TN, Johnson MO, Wachowiak M (2008). Sniffing behavior of mice during performance in
+    odor-guided tasks. Chemical Senses 33(7):581-596. doi:10.1093/chemse/bjn029
+  Intranasal pressure in freely behaving mice:
+    Janke E, et al. (2022). Machine learning-based clustering and classification of mouse behaviors via
+    respiratory patterns. iScience 25(12):105625. doi:10.1016/j.isci.2022.105625
+  Filter cutoffs, 100 Hz resampling and the 80 ms peak spacing are lab choices, not taken from these papers.
+
+
+READING IN PYTHON
+  import h5py
+  with h5py.File('11_2_s_CM_11_4_d_20260729_172306.h5', 'r') as h:
+      y = h['respiration/preprocessed/pressure'][:]; t = h['respiration/preprocessed/time_s'][:]
+      breaths = h['respiration/breaths/detected_time_s'][:]
+      ev = h['behavior/boris']; beh = ev['behavior'][:].astype(str); on = ev['start_s'][:]

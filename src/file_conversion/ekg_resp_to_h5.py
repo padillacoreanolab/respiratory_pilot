@@ -102,6 +102,8 @@ Changelog
 2026-10-24  Video frame times fitted per unbroken run (camera pauses), corrupt
             frame timestamps flagged, outputs named after the session folder
             (`# FIX (2026-10-24)`). See docs/DATA_README.md for per-cohort notes.
+2026-10-28  /resp_clean: median-center + ±10 MAD clip added before the filters
+            (lab original method; `# FIX (2026-10-28)`).
 """
 
 # NEW (2026-09-30): channel names as they appear in the .analog export
@@ -119,7 +121,7 @@ IMU_CHANNELS = {
     "mag_z": "Headstage_MagZ",
 }
 DEFAULT_CLOCKRATE = 20000.0
-SCRIPT_VERSION = "2026-10-24"
+SCRIPT_VERSION = "2026-10-28"
 
 
 def find_merged_rec_files(datapath):
@@ -299,6 +301,10 @@ def clean_resp(raw, fs, target_rate=100):
     NEW (2026-10-01): same lowpass → downsample → 0.1-20 Hz bandpass as
     trodes_ECU_to_h5_clean_raw.py, so BLA notebooks that read
     /resp_clean/signal and /resp_clean/time keep working.
+    FIX (2026-10-28): median-center and clip at ±10 MAD before filtering, as in
+    the lab's original method (src/rsp/original_method.py), so large artifacts
+    (air pushes, tubing knocks) don't ring into neighboring breaths and breath
+    peaks match earlier analyses.
     Returns (signal, time) or (None, None) if neurokit2 is unavailable.
     """
     try:
@@ -306,8 +312,13 @@ def clean_resp(raw, fs, target_rate=100):
         from scipy.signal import butter, filtfilt, resample_poly
     except ImportError:
         return None, None
+    x = np.asarray(raw, dtype=float)
+    x = x - np.median(x)
+    mad = np.median(np.abs(x))
+    if mad > 0:
+        x = np.clip(x, -10 * mad, 10 * mad)
     b, a = butter(N=4, Wn=(target_rate / 2) / (fs / 2), btype='low')
-    filtered = filtfilt(b, a, np.asarray(raw, dtype=float))
+    filtered = filtfilt(b, a, x)
     downsampled = resample_poly(filtered, up=1, down=int(fs // target_rate))
     sig = nk.signal_filter(downsampled, lowcut=0.1, highcut=20, method="butterworth",
                            sampling_rate=target_rate, order=2)
@@ -687,7 +698,10 @@ def export_to_h5(output_path, data):
             rc.create_dataset('time', data=t)
             _set_attrs(rc, {"sampling_rate": 100, "original_fs": data["clockrate"],
                             "source_channel": rh["file_stem"],
-                            "note": "time 0 = /resp[0]; built from duplicate-free samples"})
+                            "note": "time 0 = /resp[0]; built from duplicate-free samples",
+                            "method": "median-center, clip ±10 MAD, Butterworth order-4 50 Hz "
+                                      "low-pass (filtfilt), resample_poly to 100 Hz, order-2 "
+                                      "0.1-20 Hz band-pass (neurokit2)"})
         else:
             warnings.append("neurokit2 not installed: /resp_clean not written "
                             "(run in biopipeline-env)")
