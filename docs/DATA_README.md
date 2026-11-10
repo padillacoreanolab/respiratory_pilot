@@ -75,7 +75,8 @@ t_resp = video_time_to_resp_time(h5_path, boris_df["Start (s)"])  # seconds from
 ```
 
 This only works on H5s made by the current `ekg_resp_to_h5.py`, which writes `/video`. Older
-H5s have no video timing (see section 4).
+H5s have no video timing (see section 4). For cagemate sessions, the export's `behavior_aligned/`
+CSVs already contain the mapped times.
 
 ---
 
@@ -105,12 +106,23 @@ This is the canonical script for converting Trodes `.rec` files to H5. Use it fo
 
 | Cohort / type | Status | Notes |
 |---|---|---|
-| 1 CM | Can be re-run | Existing H5s were made with the Aug-2025 version, which kept the filler samples and had no video timing. All cohort 1 results come from those files. |
+| 1 CM | **Rebuilt** 2026-10-27 (baseline, 1d and 10d isolation) | The Dropbox `cm_h5` files are the Aug-2025 version (filler samples kept, no video timing). All cohort 1 results so far come from those older files. |
 | 1 valence | The raw `.rec` files are not on Dropbox. The H5s still contain the filler samples (about 0.22 % time stretch) and the camera offset. |
-| 2 (all types) | Will be re-run, not done yet | Write to a **new** folder (e.g. `h5_outputs_v2`), because `h5_outputs/` holds the old layout and some names differ. `RI1_hc_day2/5_1_RI1_m2_m_off_20260110_174649` has lost its exports: re-export it first. bl_cc has never been converted. |
-| 3 CM | **Done** (2026-10-01) | Reproduced exactly by the current script. |
+| 2 (all types) | CM **rebuilt** 2026-10-27; RI/OFT/bl_cc not yet | Write to a **new** folder (e.g. `h5_outputs_v2`), because `h5_outputs/` holds the old layout and some names differ. `RI1_hc_day2/5_1_RI1_m2_m_off_20260110_174649` has lost its exports: re-export it first. bl_cc has never been converted. |
+| 3 CM | **Done** (2026-10-01; rebuilt into the cagemate export 2026-10-27) | Reproduced exactly by the current script. |
 | 3 RI1 | Old layout | The exports for `11_4_RI1_p_off_20260711_153254` and `12_4_RI1_j_on_20260711_141535` are missing: re-export them before re-running. |
 | 3 OFT | No H5s | |
+
+**Cagemate exports (all cohorts, 2026-10-27).** [cagemate_export.py](../src/file_conversion/cagemate_export.py)
+rebuilds every CM session of cohorts 1–3 with this script. For each cohort folder it writes:
+- the H5s;
+- `behavior_aligned/<session>.csv`: BORIS bouts with `start/stop_resp_sec` and `_resp_idx`, mapped
+  through the BORIS `Image index` and `/video`;
+- `manifest.csv`: per-session timing QC, warnings and documented exclusions.
+
+**Use the aligned CSVs instead of BORIS `Start (s)`.** Every BORIS file was checked: each was scored
+on the raw session mp4, not on the trimmed copies. [alignment_clips.py](../src/file_conversion/alignment_clips.py)
+renders the video + ethogram + respiration check clips.
 
 **Output layout** (one file per session)
 
@@ -136,6 +148,7 @@ This is the canonical script for converting Trodes `.rec` files to H5. Use it fo
 | C2 RI1/RI2/OFT `*/h5_outputs`, `BLA_OFT_h5_outputs` | `resp_to_h5_ecu_only.py` | `analog/`, `dio/`, `time/`; no `resp_clean`; no video timing |
 | C3 CM `BLA_ChR_resp_CM_hc/h5_outputs` | current `ekg_resp_to_h5.py` | full layout (section 3) |
 | C3 RI1 `BLA_ChR_resp_RI1_hc_day1_2/h5_outputs` | `resp_to_h5_ecu_only.py` | as C2 RI |
+| **All CM, C1–C3** repo `exports/cagemate_h5/` (git-ignored, for Dropbox) | current `ekg_resp_to_h5.py` via `cagemate_export.py` | full layout, plus `behavior_aligned/` and `manifest.csv` |
 
 All of these layouts load through `resp_helper_functions`. It reads `analog/*ECU_Ain1` if present,
 otherwise `resp`, then low-pass filters to 200 Hz, downsamples to 400 Hz and band-passes 0.1 to 20 Hz.

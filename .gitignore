@@ -207,3 +207,10 @@ overlay_plots/
 updated_twice_analog_h5_outputs/
 diff_fam_social_memory_ephys/
 ephys_analysis/
+# Local data exports and alignment clips (upload to Dropbox, never commit)
+exports/
+
+# Local test recordings/videos (never tracked)
+test_data/
+local_data/
+src/behavior/test/output/
