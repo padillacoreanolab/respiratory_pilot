@@ -394,6 +394,11 @@ def build_video_group_data(video, resp_timestamps, clockrate):
     d = np.diff(frame_ts.astype(np.int64))
     n_backwards = int((d < 0).sum())
     breaks = np.flatnonzero(d > 5 * np.median(d)) + 1
+    # FIX (2026-11-10): corrupt (non-monotonic) timestamps have no meaningful
+    # pauses. Aim1 RI1_s3_5 gave ~9k bogus "gaps", which overflowed the 64 KB
+    # HDF5 attribute limit on camera_gaps_sec and crashed the export.
+    if n_backwards:
+        breaks = np.array([], dtype=np.int64)
     fit_ts = frame_ts.astype(np.float64)
     seg_slopes = []
     for seg in np.split(idx, breaks):
@@ -406,6 +411,21 @@ def build_video_group_data(video, resp_timestamps, clockrate):
     if n_backwards:
         fit_ts[:] = np.nan
     resid_ms = (frame_ts - fit_ts) / clockrate * 1000.0
+
+    # FIX (2026-11-10): the straight-line fit assumes a constant capture rate.
+    # Some webcam sessions change rate without a pause: Aim1 BLRI_s2_4 runs at
+    # 24 fps, then drops to 15 fps near 575 s (fit off by up to 10 s), and
+    # several sessions start ~2 s slow (fit off by 0.3-0.8 s). When the line
+    # misses any frame by >150 ms (jitter alone is <=~50 ms), add a 2 s rolling
+    # median of the residual: tracks rate changes, still removes USB jitter.
+    # Sessions that fit well are unchanged.
+    frame_time_method = "linear fit per unbroken run"
+    if not n_backwards and np.nanmax(np.abs(resid_ms)) > 150:
+        from scipy.ndimage import median_filter
+        w = int(round(2 * clockrate / slope)) | 1
+        fit_ts = fit_ts + median_filter(frame_ts - fit_ts, size=w, mode="nearest")
+        resid_ms = (frame_ts - fit_ts) / clockrate * 1000.0
+        frame_time_method = f"linear fit + {w}-frame rolling median of residual (capture rate not constant)"
 
     resp_t0 = int(resp_timestamps[0])
     frame_time_sec = (fit_ts - resp_t0) / clockrate
@@ -425,6 +445,7 @@ def build_video_group_data(video, resp_timestamps, clockrate):
         "timestamps_file": os.path.basename(video["timestamps_path"]),
         "mp4_file": os.path.basename(video["mp4_path"]) if video["mp4_path"] else "",
         "fit_fps": float(clockrate / slope),
+        "frame_time_method": frame_time_method,
         "fit_residual_ms_p99_abs": float(np.nanpercentile(np.abs(resid_ms), 99)) if not n_backwards else np.nan,
         "fit_residual_ms_max_abs": float(np.nanmax(np.abs(resid_ms))) if not n_backwards else np.nan,
         "n_camera_gaps": int(breaks.size),
@@ -443,6 +464,9 @@ def build_video_group_data(video, resp_timestamps, clockrate):
     if n_backwards:
         warnings.append(f"{n_backwards} backwards frame timestamps (corrupt .videoTimeStamps): "
                         f"frame_to_resp_index is all -1, do not align this video")
+    if frame_time_method.startswith("linear fit +"):
+        warnings.append("capture rate not constant (start-up or mid-session rate change): "
+                        "frame times locally corrected. mp4/BORIS seconds are not real seconds; map via frame index.")
     if breaks.size:
         warnings.append(f"camera paused {breaks.size}x (longest {gap_sec.max():.1f} s): "
                         f"mp4/BORIS seconds after a pause are wrong. Map via frame index.")
@@ -466,7 +490,9 @@ def build_video_group_data(video, resp_timestamps, clockrate):
     if abs(attrs["mp4_time_scale"] - 1) > 0.001:
         warnings.append(f"mp4 encoded at {attrs['mp4_fps']:.3f} fps but camera captured "
                         f"{attrs['fit_fps']:.3f} fps: 1 s of mp4/BORIS time = "
-                        f"{1 / attrs['mp4_time_scale']:.3f} s real time. Map via frame index.")
+                        # FIX (2026-11-10): was 1/scale (inverted). 1 s of mp4 = mp4_fps
+                        # frames = mp4_fps / fit_fps s of real capture.
+                        f"{attrs['mp4_time_scale']:.3f} s real time. Map via frame index.")
     if attrs["video_end_minus_resp_end_sec"] > 5:
         warnings.append(f"video runs {attrs['video_end_minus_resp_end_sec']:.1f} s past the end "
                         f"of the respiration data (short/truncated analog export?)")

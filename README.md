@@ -2,7 +2,7 @@
 Read in TDT files analyze resp data. 
 
 **Data docs:** [docs/DATA_README.md](docs/DATA_README.md) covers the cohorts, recording differences, H5 conversion
-and behavior alignment. Exclusions: [EXCLUSIONS_LOG.md](notebooks/thomas_notebooks/resp_classification/docs/EXCLUSIONS_LOG.md).
+and behavior alignment. Exclusions: [RESP_ANALYSIS_GUIDE.md §4](notebooks/thomas_notebooks/RESP_ANALYSIS_GUIDE.md#4-exclusions-binding).
 # notes for furture self
 created repository with gitignore file and read me file 
 gitignore is a file used to make sure data is not deposited to github we can add different file types to be ignored by adding the file type to the ignore list e.g. *.mp4 using astrix 

@@ -1,0 +1,13 @@
+# Slide decks + their build scripts/figures (local only)
+presentations/
+*.pptx
+
+# keypoint-MoSeq model outputs (2.8 GB checkpoint, GIFs, PDFs; regenerable from keypoints.ipynb)
+keypoint_moseq/kpms_project/
+
+# Superseded feature pickles waiting for deletion (data files never go in git)
+review&delete/superseded_data/
+
+# Draft panels saved by the classifier notebooks (were in the ignored plots/ folder;
+# poster-ready versions are in figures/decoder_metrics and figures/decoder_roc)
+figures/classifier_notebook_panels/

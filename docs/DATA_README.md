@@ -3,8 +3,8 @@
 Read this before you load any respiration H5 or align it with BORIS or SLEAP. The cohorts were
 recorded on different setups, and those differences change the timing.
 
-Session-level inventory: [DATA_INVENTORY.md](../notebooks/thomas_notebooks/resp_classification/docs/DATA_INVENTORY.md).
-Binding drop list: [EXCLUSIONS_LOG.md](../notebooks/thomas_notebooks/resp_classification/docs/EXCLUSIONS_LOG.md).
+Session-level inventory: [RESP_ANALYSIS_GUIDE.md §3](../notebooks/thomas_notebooks/RESP_ANALYSIS_GUIDE.md#3-data).
+Binding drop list: [RESP_ANALYSIS_GUIDE.md §4](../notebooks/thomas_notebooks/RESP_ANALYSIS_GUIDE.md#4-exclusions-binding).
 
 Dropbox root: `UF Dropbox/Thomas Heeps/Padilla-Coreano Lab/`
 
@@ -26,7 +26,7 @@ Cohorts are numbered by recording date. The Dropbox folder names count only BLA 
 | Merge filler samples | About 28k per session (must be removed) | 0 | 0 |
 | Camera (C920 webcam) | 30 fps | 15 fps | 15 fps |
 | Laser TTL (`ECU_Din1`) | none | RI and OFT sessions | RI and OFT sessions |
-| Raw `.rec` on Dropbox | CM yes; **valence no** (H5 only) | yes | yes |
+| Raw `.rec` on Dropbox | yes (valence added 2026-11-10, `Day1_new/<session>.rec/`) | yes | yes |
 
 **The same for every cohort:** respiration is on `ECU_Ain1` of the same MCU (serial 01703 00102).
 It is sampled at 20 kHz on the Trodes clock and stored as int16 **ADC counts**, not volts.
@@ -49,13 +49,21 @@ recording seconds. There are three ways this goes wrong:
    | Cohort | Capture fps | Sessions whose mp4 fps differs |
    |---|---|---|
    | 1 CM | 30 | 1 of 9 (`CM_s4_7_d4_8`, 23 fps) |
+   | 1 valence | 30, but **15** in `RI1/RI2_s1_1`, `RI1/RI2_s2_4`, `BLRI_s1_1`; `BLRI_s2_4` **24 then 15** from ~575 s; first ~2 s slow in `RI1_s1_2/s4_8/s5_13` | 6 of 27: `RI1_s1_1` (mp4 13 vs 15), `BLRI_s1_1` (30 vs 15), `BLRI_s2_4` (30 vs 24/15), `RI1_s3_6` (29), `BLRI_s2_3` and `BLRI_s5_13` (31). `RI1_s3_5` unknown (corrupt timestamps) |
+
+   Valence rates verified 2026-11-10 without BORIS: the Trodes `.videoTimeStamps` give the capture rate
+   (per 10 s window), and `ffprobe -count_packets` shows every mp4 holds exactly as many frames as
+   `.videoTimeStamps`, so the mp4 header fps is only a playback label. BORIS's FPS always equals that
+   header, so BORIS frame = `Start (s)` × header fps (8 of 17 valence BORIS files lack `Image index`).
+   Old-pipeline error (BORIS seconds used as respiration seconds): `RI1_s1_1` up to **81 s**,
+   `RI1_s3_6` up to **20 s**, other sessions ≤ ~1.3 s.
    | 2 | 15 | **about 92 of 142**: CM 12 of 24, RI1 d1 18 of 24, RI1 d2 20 of 24, RI2 about 26 of 46, OFT 16 of 24 (mp4 at 13 to 32 fps; bl_cc not checked) |
    | 3 | 15 | CM 1 of 11 (`13_2_d…111038`, 16 fps), RI1 5 of 44, OFT 2 of 22 |
 
 2. **Camera starts before the respiration data (cohort 1 only).** The wireless merge makes the
    video start 0 to 1.1 s before the respiration data. In cohorts 2 and 3 the offset is under 0.1 s.
 
-3. **Recording pauses (cohort 2 only).** In these sessions Trodes stopped and then resumed. The
+3. **Recording pauses (cohort 2; smaller gaps in cohort 1 valence, below).** In these sessions Trodes stopped and then resumed. The
    respiration data has a gap, and `index / 20000` is wrong after the gap.
 
    | Session | Pause |
@@ -65,6 +73,17 @@ recording seconds. There are three ways this goes wrong:
    | `RI2_post_d2/4_3_RI2_f2_e_on_20260120_143307` | 71.4 s |
    | `RI2_post_d2/7_1_RI2_m1_j_on_20260120_122806` | 41.3 s |
    | `RI2_post_d2/3_1_RI2_f1_b_on_20260120_135800` | `.videoTimeStamps` is **corrupt**. Do not align this video. |
+
+   **Cohort 1 valence** (found in the 2026-11-10 rebuild; the H5s carry the same warnings):
+
+   | Session | Problem |
+   |---|---|
+   | `RI1_s3_5_p5_4_nRB3_20250621_105014` | `.videoTimeStamps` is **corrupt** (8,349 backwards jumps). No video mapping; do not align. Already dropped (no BORIS). |
+   | `BLRI_s2_3_p5_3_nRB3_20250622_101813` | One respiration gap, 0.46 s (9,181 samples). Use `/timestamps`. |
+   | `BLRI_s3_5_p5_4_nRB3_20250621_102659` | One respiration gap, 0.12 s (2,447 samples). Use `/timestamps`. |
+   | `BLRI_s5_13_p5_4_nRB3_20250622_175809` | Camera stalled 297 times (longest 2.9 s); mp4 seconds drift after each stall. |
+   | `RI2_s3_5_p5_4_nRB3_20250621_112618` | Respiration stops at 3.6 min; the video runs 389 s longer. |
+   | `RI2_s5_13_p5_4_nRB3_20250622_184136` | Session is 8.1 min (others about 10). |
 
 **The fix for all three:** map BORIS and SLEAP times through the frame index.
 
@@ -107,7 +126,7 @@ This is the canonical script for converting Trodes `.rec` files to H5. Use it fo
 | Cohort / type | Status | Notes |
 |---|---|---|
 | 1 CM | **Rebuilt** 2026-10-27 (baseline, 1d and 10d isolation) | The Dropbox `cm_h5` files are the Aug-2025 version (filler samples kept, no video timing). All cohort 1 results so far come from those older files. |
-| 1 valence | The raw `.rec` files are not on Dropbox. The H5s still contain the filler samples (about 0.22 % time stretch) and the camera offset. |
+| 1 valence | **Rebuilt** 2026-11-10 (27 sessions: 9 BLRI, 9 RI1, 9 RI2) by [valence_export.py](../src/file_conversion/valence_export.py) into `2025/ECG_cohort1/Aim1/new_resp_h5_valence/{RI1,RI2,BLRI}/` + `manifest.csv`. Not yet behavior-aligned. `RI1_s3_5` has corrupt `.videoTimeStamps` (no video mapping). Several sessions were captured at 15 fps or have mp4s at 13/29/31 fps (see manifest). `BLRI_s3_5` is new; `BLRI_s5_13` now has respiration (the old H5 had none). |
 | 2 (all types) | CM **rebuilt** 2026-10-27; RI/OFT/bl_cc not yet | Write to a **new** folder (e.g. `h5_outputs_v2`), because `h5_outputs/` holds the old layout and some names differ. `RI1_hc_day2/5_1_RI1_m2_m_off_20260110_174649` has lost its exports: re-export it first. bl_cc has never been converted. |
 | 3 CM | **Done** (2026-10-01; rebuilt into the cagemate export 2026-10-27) | Reproduced exactly by the current script. |
 | 3 RI1 | Old layout | The exports for `11_4_RI1_p_off_20260711_153254` and `12_4_RI1_j_on_20260711_141535` are missing: re-export them before re-running. |
@@ -148,6 +167,7 @@ renders the video + ethogram + respiration check clips.
 | C2 RI1/RI2/OFT `*/h5_outputs`, `BLA_OFT_h5_outputs` | `resp_to_h5_ecu_only.py` | `analog/`, `dio/`, `time/`; no `resp_clean`; no video timing |
 | C3 CM `BLA_ChR_resp_CM_hc/h5_outputs` | current `ekg_resp_to_h5.py` | full layout (section 3) |
 | C3 RI1 `BLA_ChR_resp_RI1_hc_day1_2/h5_outputs` | `resp_to_h5_ecu_only.py` | as C2 RI |
+| **C1 valence (new)** `Aim1/new_resp_h5_valence/{RI1,RI2,BLRI}` | current `ekg_resp_to_h5.py` via `valence_export.py` (2026-11-10) | full layout (section 3) |
 | **All CM, C1–C3** repo `exports/cagemate_h5/` (git-ignored, for Dropbox) | current `ekg_resp_to_h5.py` via `cagemate_export.py` | full layout, plus `behavior_aligned/` and `manifest.csv` |
 
 All of these layouts load through `resp_helper_functions`. It reads `analog/*ECU_Ain1` if present,
@@ -179,6 +199,9 @@ to explain the old files. They hard-code 20 kHz, store no frame timing, and have
 
 ## 6. Signal quality (summary; see EXCLUSIONS_LOG for decisions)
 
+- Cohort 1 valence: subject 5_13 is excluded (RI1 rate outlier, RI2 flat). The log also gives
+  "BLRI H5 has no `resp`" as a reason. That is **no longer true**: the 2026-11-10 rebuild has a full
+  10.3 min BLRI_s5_13 signal (not yet quality-checked). The exclusion stands until reviewed.
 - Cohort 2: mice 2_3, 5_1, 5_2, 5_3 and 6_3 have noise-only respiration in all four RI sessions,
   but normal CM sessions.
 - Cohort 3: 16 of 44 RI1 sessions have low signal for the whole session.

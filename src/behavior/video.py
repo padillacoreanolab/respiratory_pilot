@@ -1,9 +1,8 @@
 """
 Video timing, frame reading, alignment clips, and h264 -> mp4 conversion.
 
-Frame timing comes from the H5 /video group written by
-src/file_conversion/ekg_resp_to_h5.py (fitted Trodes frame times on the
-respiration clock). See docs/DATA_README.md section 2.
+Frame timing is read from the H5 /video group written by
+src/file_conversion/ekg_resp_to_h5.py.
 """
 import os
 import subprocess
@@ -21,7 +20,15 @@ COLORS = {"facial sniffing": "#d62728", "anogenital sniffing": "#9467bd",
 
 
 def load_video_timing(h5_path):
-    """Per-frame respiration times + mp4 info from an H5's /video group."""
+    """
+    Read per-frame timing from an H5.
+
+    Args:
+        h5_path: H5 made by ekg_resp_to_h5.py (must have /video)
+    Returns:
+        dict: frame_time_sec (s from /resp[0]), frame_in_resp (bool),
+        n_frames, mp4_fps, capture_fps, n_camera_gaps
+    """
     with h5py.File(h5_path, "r") as f:
         if "video" not in f:
             raise ValueError(f"{h5_path} has no /video: re-convert with ekg_resp_to_h5.py")
@@ -30,18 +37,27 @@ def load_video_timing(h5_path):
         resp_idx = v["frame_to_resp_index"][:]
         a = dict(v.attrs)
     return {
-        "frame_time_sec": frame_time,            # s from /resp[0]
-        "frame_in_resp": resp_idx >= 0,          # False = before/after resp, or corrupt
+        "frame_time_sec": frame_time,
+        "frame_in_resp": resp_idx >= 0,
         "n_frames": int(a.get("mp4_n_frames", frame_time.size)),
-        "mp4_fps": float(a["mp4_fps"]),          # encoded rate (what BORIS sees)
-        "capture_fps": float(a["fit_fps"]),      # real camera rate
+        "mp4_fps": float(a["mp4_fps"]),          # encoded rate
+        "capture_fps": float(a["fit_fps"]),      # camera rate
         "n_camera_gaps": int(a.get("n_camera_gaps", 0)),
     }
 
 
 def read_frame(mp4_path, frame):
-    """One RGB frame. Reads sequentially IOT get the exact frame (seeking can land off by a few)."""
+    """
+    Read one frame.
+
+    Args:
+        mp4_path: video file
+        frame: 0-based frame index
+    Returns:
+        RGB image array, or None if past the end
+    """
     cap = cv2.VideoCapture(mp4_path)
+    # Grab frames in order IOT land on the exact frame (seeking can be off)
     for _ in range(int(frame)):
         cap.grab()
     ok, img = cap.read()
@@ -50,7 +66,16 @@ def read_frame(mp4_path, frame):
 
 
 def plot_ethogram(beh, t0, t1, ax=None):
-    """Bouts (resp-clock seconds) as colored bars, one row per subject + behavior."""
+    """
+    Plot bouts as colored bars, one row per subject + behavior.
+
+    Args:
+        beh: DataFrame with Subject, Behavior, start_resp_sec, duration_resp_sec
+        t0, t1: time window (s)
+        ax: matplotlib axis (default: current)
+    Returns:
+        ax
+    """
     ax = ax or plt.gca()
     win = beh[(beh["stop_resp_sec"] > t0) & (beh["start_resp_sec"] < t1)]
     rows = sorted(set(zip(win["Subject"], win["Behavior"])))
@@ -66,12 +91,24 @@ def plot_ethogram(beh, t0, t1, ax=None):
 
 
 def make_alignment_clip(mp4_path, timing, beh, resp, resp_t, t0, dur, out_mp4):
-    """Real-time mp4: video on top, ethogram, then respiration, with a moving cursor."""
+    """
+    Write a real-time clip: video, ethogram and respiration with a moving cursor.
+
+    Args:
+        mp4_path: session video
+        timing: load_video_timing output
+        beh: aligned bouts (boris.frames_to_resp output)
+        resp, resp_t: processed respiration and its time (s)
+        t0, dur: clip start and length (s, respiration clock)
+        out_mp4: output path
+    Returns:
+        out_mp4
+    """
     t1 = t0 + dur
     frames = np.flatnonzero((timing["frame_time_sec"] >= t0) & (timing["frame_time_sec"] <= t1))
 
     # Figure layout IOT show video, behavior and breathing on one time axis
-    fig = plt.figure(figsize=(7.2, 8), dpi=100)  # 720x800 px: divisible by 8 for the encoder
+    fig = plt.figure(figsize=(7.2, 8), dpi=100)  # 720x800 px, divisible by 8 for the encoder
     gs = fig.add_gridspec(3, 1, height_ratios=[3, 1.2, 1.2], hspace=0.3,
                           left=0.27, right=0.97, top=0.95, bottom=0.07)
     ax_v, ax_e, ax_r = (fig.add_subplot(gs[i]) for i in range(3))
@@ -111,14 +148,20 @@ def make_alignment_clip(mp4_path, timing, beh, resp, resp_t, t0, dur, out_mp4):
 
 def convert_h264_to_mp4(h264_path, fps, out_path=None, duration_s=None):
     """
-    Raw Trodes .h264 -> SLEAP/BORIS-friendly mp4 (from src/vid_conversion.ipynb).
-    Pass the capture fps IOT avoid ffmpeg's 25 fps guess for raw h264, which
-    makes mp4 seconds differ from real seconds. duration_s converts only the
-    first N seconds (for quick tests).
+    Convert a raw Trodes .h264 to an mp4 for SLEAP/BORIS.
+
+    Args:
+        h264_path: raw video
+        fps: camera capture rate
+        out_path: default <name>_converted.mp4 next to the input
+        duration_s: convert only the first N seconds (optional)
+    Returns:
+        out_path (skipped if it already exists)
     """
     out_path = out_path or h264_path.replace(".h264", "_converted.mp4")
     if os.path.exists(out_path):
         return out_path
+    # Set the input frame rate IOT keep mp4 seconds = real seconds (ffmpeg guesses 25)
     cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-framerate", str(fps), "-i", h264_path]
     if duration_s:
         cmd += ["-t", str(duration_s)]
