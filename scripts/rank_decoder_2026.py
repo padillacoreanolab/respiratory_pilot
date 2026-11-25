@@ -5,14 +5,14 @@ Question  In a cagemate recording, does the subject's breathing tell whether it 
 Data      Shared H5s (01_shared_h5/): breaths = respiration/breaths/reviewed (hand review, written by
           scripts/apply_review_to_shared_h5.py; review_stage FINAL or returned), bad signal = reviewer_excluded.
 Windows   Fixed 3 s, non-overlapping, over all cagemate time; a window is used only if it has no bad signal.
-          (PI decision: rank is a state, so fixed windows, not behavior bouts.)
+          (Rank is a state, so fixed windows, not behavior bouts.)
 Tags      Cleaned BORIS (03_boris/cleaned/): 'investigation' if either mouse sniffs (face/body/anogenital), allogrooms or
           chases during any part of the window. MAIN analysis = windows with no investigation.
 Features  rate; inter-breath interval mean / SD / CV / min / max; fraction of intervals < 125 ms (> 8 Hz);
           amplitude CV; amplitude mean and SD relative to the recording's median amplitude (raw amplitude depends on gain).
 Control   Locomotion: both mice's speed (body lengths/s, SLEAP, identity-free) per window: mean speed, fraction moving.
 Cohort    Features standardized within each cohort with TRAINING recordings only; training weights give every
-          cohort x label cell equal weight (PI: cohort-balanced). Within-cohort decoders reported too.
+          cohort x label cell equal weight (cohort-balanced). Within-cohort decoders reported too.
 Testing   Outer: leave one cage out (cage = cohort + cage number). Inner (tuning, training cages only): 3-fold grouped by cage,
           scored by recording-level AUC. Logistic: C in {0.01, 0.1, 1, 10}. RBF SVM: C in {0.3, 3} x gamma in {0.5, 2}/n_features.
           A recording's score = mean decision value of its windows. Main number = recording-level AUC over all held-out recordings.
